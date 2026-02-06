@@ -35,13 +35,8 @@ def train_ae(dataloader, ae, device, save_path, logs_path, num_epochs, denorm_fn
             encoded = ae.encode(data)
             decoded = ae.decode(encoded)
 
-
             denorm_data = denorm_fn(data)
             denorm_decoded = denorm_fn(decoded)
-
-            # loss = F.mse_loss(decoded, data)
-
-
 
             L1_loss = F.l1_loss(decoded, data)
             ssim_loss = 1 - ssim(denorm_data, denorm_decoded, data_range=1.0, size_average=True)
@@ -64,9 +59,11 @@ def train_ae(dataloader, ae, device, save_path, logs_path, num_epochs, denorm_fn
         logger.add_scalar('Loss/SSIM', avg_ssim_loss, epoch)
         logger.add_scalar('Learning Rate', lr_scheduler.get_last_lr()[0], epoch)
         
-        if epoch % 50 == 0: # Log images every 50 epochs:
+        if epoch % (num_epochs//10) == 0: # Log images every 10% of training:
             logger.add_image('Ground Truth', tensorboard_image_process(denorm_data), epoch)
             logger.add_image('Reconstruction', tensorboard_image_process(denorm_decoded), epoch)
+            diff_reconstruction = torch.abs(denorm_data - denorm_decoded)
+            logger.add_image('Reconstruction Error', tensorboard_image_process(diff_reconstruction), epoch)
 
 
 
