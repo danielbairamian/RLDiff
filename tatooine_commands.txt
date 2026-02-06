@@ -1,0 +1,11 @@
+rsync --progress -raz -e "ssh -p 2222" RLDiff/ daniel.bairamian@login.server.mila.quebec:/home/mila/d/daniel.bairamian/RLDiff/
+
+
+# ssh with port forwarding
+
+ssh -L 9999:localhost:6006 mila
+
+# run tensorboards on MILA
+
+module --quiet load anaconda/3
+conda activate RLDiff
