@@ -75,6 +75,20 @@ class PPOAgent(nn.Module):
 
         return action, value.squeeze(-1), log_prob
     
+    def evaluate_actions(self, state, alpha, steps, actions):
+        combined = self.backbone(state, alpha, steps)
+        
+        action_mean = self.action_mean(combined)
+        action_log_std = self.action_log_std(combined)
+        
+        probs = Normal(action_mean, torch.exp(action_log_std))
+        value = self.critic(combined)
+
+        log_prob = probs.log_prob(actions).sum(dim=-1) # sum log probs if action_dim > 1 
+        entropy = probs.entropy().sum(dim=-1) # sum entropy if action_dim > 1
+
+        return log_prob, value.squeeze(-1), entropy
+    
 
 if __name__ == "__main__":
     # device
