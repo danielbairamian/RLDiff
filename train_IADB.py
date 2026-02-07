@@ -37,9 +37,13 @@ def train_iadb(dataloader, iadb_model, device, save_path, logs_path, num_epochs,
             optimizer.step()
 
             avg_batch_loss += (loss.item() - avg_batch_loss) / (batch_idx + 1)
+            break
 
         
-        torch.save(iadb_model.state_dict(), os.path.join(save_path, f'iadb_model.pth'))
+        # torch.save(iadb_model.state_dict(), os.path.join(save_path, f'iadb_model.pth'))
+        # save the class instance instead of just the state dict to avoid issues with loading the model later without having the exact same code structure
+        torch.save(iadb_model, os.path.join(save_path, f'iadb_model.pth'))
+
         logger.add_scalar('Loss/train', avg_batch_loss, epoch)
         logger.add_scalar('Learning Rate', lr_scheduler.get_last_lr()[0], epoch)
         lr_scheduler.step()

@@ -52,7 +52,10 @@ def train_ae(dataloader, ae, device, save_path, logs_path, num_epochs, denorm_fn
             avg_L1_loss += (L1_loss.item() - avg_L1_loss) / (batch_idx + 1)
             avg_ssim_loss += (ssim_loss.item() - avg_ssim_loss) / (batch_idx + 1)
 
-        torch.save(ae.state_dict(), os.path.join(save_path, f'ae.pth'))
+        # torch.save(ae.state_dict(), os.path.join(save_path, f'ae.pth'))
+        # save the class instance instead of just the state dict to avoid issues with loading the model later without having the exact same code structure
+        torch.save(ae, os.path.join(save_path, f'ae.pth'))
+        
         lr_scheduler.step()
         logger.add_scalar('Loss/train', avg_batch_loss, epoch)
         logger.add_scalar('Loss/L1', avg_L1_loss, epoch)
