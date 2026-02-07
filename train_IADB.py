@@ -37,7 +37,6 @@ def train_iadb(dataloader, iadb_model, device, save_path, logs_path, num_epochs,
             optimizer.step()
 
             avg_batch_loss += (loss.item() - avg_batch_loss) / (batch_idx + 1)
-            break
 
         
         # torch.save(iadb_model.state_dict(), os.path.join(save_path, f'iadb_model.pth'))
