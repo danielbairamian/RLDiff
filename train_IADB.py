@@ -46,8 +46,8 @@ def train_iadb(dataloader, iadb_model, device, save_path, logs_path, num_epochs,
 
         if epoch % (num_epochs//10) == 0: # Log images every 10% of training:
             with torch.no_grad():
-                x1_linear_first_order = sample_iadb_linear_first_order(iadb_model, x0, nb_step=20)
-                x_1_cosine_second_order = sample_iadb_cosine_second_order(iadb_model, x0, nb_step=20)
+                x1_linear_first_order = sample_iadb_linear_first_order(iadb_model, x0, nb_step=128)
+                x_1_cosine_second_order = sample_iadb_cosine_second_order(iadb_model, x0, nb_step=128)
                 denorm_x1 = denorm_fn(x1)
                 denorm_x1_linear_first_order = denorm_fn(x1_linear_first_order)
                 denorm_x1_cosine_second_order = denorm_fn(x_1_cosine_second_order)
