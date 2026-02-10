@@ -19,10 +19,15 @@ class DiffusionEnv:
         action = action.clamp(0, 1)
         
         # take a step in the environment using the IADB model
-        d = self.iadb_model(self.x0, action)['sample']
+        d = self.iadb_model(self.x0, self.alpha)['sample']
         # update x0 and alpha based on the action taken
         new_alpha = self.alpha + action
         new_alpha = new_alpha.clamp(0, 1)
+
+        # if the agent is about to take the last step, and new alpha is < 1.0, we force it to take the last step to ensure the episode ends
+        # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+
+
         self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
         
         # update alpha
@@ -43,12 +48,13 @@ class DiffusionEnv:
         dist = torch.cdist(self.encoded_x0, self.x1_encoded, p=2)
         # for each sample in the batch, find the minimum distance to any of the x1 samples
         min_dist, _ = torch.min(dist, dim=-1)
-        rewards = torch.log1p(min_dist)
+        # rewards = torch.log1p(min_dist)
+        rewards = -min_dist # we want to minimize the distance, so we take the negative log distance as the reward
         # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)
         # if the episode timed out (steps >= budget), we still give the reward based on the final distance to x1
         rewards = rewards * (self.dones).float()
 
-        return {'x0_encoded': self.encoded_x0, 'alpha': self.alpha, 'steps': self.steps}, rewards, self.dones
+        return {'x0_encoded': self.encoded_x0, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
 
     @torch.no_grad()
     def reset(self):
@@ -70,7 +76,7 @@ class DiffusionEnv:
         self.alpha = torch.zeros(self.x1.shape[0], device=self.device) # Start at alpha=0 (x0)
         self.dones = torch.zeros(self.x1.shape[0], dtype=torch.bool, device=self.device)
         self.steps = torch.zeros(self.x1.shape[0], dtype=torch.int, device=self.device)
-        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps}
+        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
 
 
 
@@ -78,7 +84,7 @@ if __name__ == "__main__":
     # device
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     # dummy dataloader
-    dataloader = [(torch.randn(8, 3, 32, 32).to(device), torch.randint(0, 10, (8,)).to(device)) for _ in range(10)]
+    dataloader = [(torch.randn(4, 3, 32, 32).to(device), torch.randint(0, 10, (8,)).to(device)) for _ in range(10)]
     
     # dummy AE
     class DummyAE(torch.nn.Module):
@@ -102,10 +108,10 @@ if __name__ == "__main__":
             return {'sample': torch.randn_like(x)}
     iadb_model = DummyIADBModel().to(device)
 
-    env = DiffusionEnv(dataloader, iadb_model, AE, device, budget=20)
+    env = DiffusionEnv(dataloader, iadb_model, AE, device, budget=10)
     obs = env.reset()
     done = torch.zeros(obs['x0_encoded'].shape[0], dtype=torch.bool, device=device)
     while not done.all():
-        action = torch.rand(obs['alpha'].shape[0]).to(device) * 0.20 # small random action
+        action = torch.randn(obs['alpha'].shape[0]).to(device) * 0.01 # small random action
         obs, rewards, done = env.step(action)
         print(f"Rewards: {rewards}, Done: {done}", "Steps: ", obs['steps'], "Alpha: ", obs['alpha'])  

@@ -35,6 +35,9 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     b_rewards = torch.zeros((T, B), device=env.device)
     b_dones = torch.zeros((T, B), device=env.device)
     b_values = torch.zeros((T, B), device=env.device)
+    final_x0s = None
+    terminal_rewards = None
+    final_alphas = None
 
     last_t = T
 
@@ -56,9 +59,11 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         b_values[t] = value
 
         obs = next_obs
-
         if dones.all():
             last_t = t + 1 # +1 to include the final step where all episodes ended
+            final_x0s = obs['x0'] # Store the final x0s for all episodes at the end of the rollout
+            terminal_rewards = rewards
+            final_alphas = obs['alpha']
             break
     
     # Truncate the rollout tensors to the actual length of the episode
@@ -105,12 +110,18 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         'advantages': b_advantages[active_mask],
         'returns': b_returns[active_mask],
         'dones': b_dones[active_mask],
+        'values': b_values[active_mask],
     }
+    
+    episode_lengths = 1 - b_dones.float() # 1 for active steps, 0 for done steps
+    episode_lengths = episode_lengths.sum(dim=0) # Sum over time dimension to get episode lengths for each episode in the batch
+    episode_lengths = episode_lengths + 1 # Add 1 to include the final step where the episode ended
 
-    return rollout
+    debug_dict = {'final_x0s': final_x0s, 'terminal_rewards': terminal_rewards, 'episode_lengths': episode_lengths, 'final_alphas': final_alphas}
 
+    return rollout, debug_dict
 
-def ppo_update(env, ppo_agent, target_steps=256, minibatch_size=64):
+def ppo_buffer_generator(env, ppo_agent, target_steps=256):
     collected_steps = 0
     rollout_chunks = []
 
@@ -118,7 +129,7 @@ def ppo_update(env, ppo_agent, target_steps=256, minibatch_size=64):
     while collected_steps < target_steps:
         # Generate a rollout from the environment
         # Each rollout dictionary already has the 'active_mask' applied
-        rollout = generate_rollout(env, ppo_agent)
+        rollout, debug_dict = generate_rollout(env, ppo_agent)
         
         chunk_size = rollout['states'].shape[0]
         rollout_chunks.append(rollout)
@@ -134,6 +145,9 @@ def ppo_update(env, ppo_agent, target_steps=256, minibatch_size=64):
     # normalize advantages
     full_rollout['advantages'] = (full_rollout['advantages'] - full_rollout['advantages'].mean()) / (full_rollout['advantages'].std() + 1e-8)
 
+    return full_rollout, debug_dict # return the final x0s from the last rollout for logging or analysis purposes after the PPO update
+
+def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
     for i in range(0, full_rollout['states'].shape[0], minibatch_size):
 
         # drop last
@@ -142,30 +156,91 @@ def ppo_update(env, ppo_agent, target_steps=256, minibatch_size=64):
 
         minibatch = {key: full_rollout[key][i:i+minibatch_size] for key in full_rollout.keys()}
 
-    new_logprobs, new_values, entropy = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
-    kl = new_logprobs - minibatch['logprobs']
-    ratio = torch.exp(kl.clip(-10, 10)) # clip for numerical stability
-    surrogate1 = ratio * minibatch['advantages']
-    surrogate2 = torch.clamp(ratio, 1 - PPO_EPSILON, 1 + PPO_EPSILON) * minibatch['advantages'] 
-    
-    policy_loss = -torch.min(surrogate1, surrogate2).mean()
-    value_loss = F.mse_loss(new_values, minibatch['returns'])
+        new_logprobs, new_values, entropy = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
+        kl = new_logprobs - minibatch['logprobs']
+        ratio = torch.exp(kl.clip(-10, 10)) # clip for numerical stability
+        surrogate1 = ratio * minibatch['advantages']
+        surrogate2 = torch.clamp(ratio, 1 - PPO_EPSILON, 1 + PPO_EPSILON) * minibatch['advantages'] 
+        
+        policy_loss = -torch.min(surrogate1, surrogate2).mean()
+        value_loss = F.mse_loss(new_values, minibatch['returns'])
 
-    return policy_loss, value_loss, entropy.mean()
+        yield policy_loss, value_loss, entropy.mean()
 
-def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01):
+def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, denorm_fn=None, logs_path=None, save_path=None):
 
     optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
+    logger = SummaryWriter(logs_path)
 
     for epoch in tqdm(range(num_epochs)):
-        policy_loss, value_loss, entropy = ppo_update(env, ppo_agent, target_steps, minibatch_size)
+        epoch_policy_loss = 0.0
+        epoch_value_loss = 0.0
+        epoch_entropy = 0.0
+        epoch_total_loss = 0.0
 
-        optimizer.zero_grad()
-        loss = policy_loss + value_loss - entropy_coef * entropy
-        loss.backward()
-        optimizer.step()
+        rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
 
-        print(f"Epoch {epoch}: Policy Loss={policy_loss.item():.4f}, Value Loss={value_loss.item():.4f}, Entropy={entropy.item():.4f}")
+        for k in range(num_ppo_epochs):
+            # randomize the order of the rollout for each epoch to ensure better training stability and data efficiency
+            perm = torch.randperm(rollout_buffer['states'].shape[0])
+            for key in rollout_buffer.keys():
+                rollout_buffer[key] = rollout_buffer[key][perm]
+
+            for policy_loss, value_loss, entropy in ppo_update(ppo_agent, minibatch_size, full_rollout=rollout_buffer):
+                optimizer.zero_grad()
+                loss = policy_loss + value_loss - entropy_coef * entropy
+                loss.backward()
+                optimizer.step()
+
+                epoch_policy_loss += (policy_loss.item() - epoch_policy_loss) / (epoch + 1)
+                epoch_value_loss += (value_loss.item() - epoch_value_loss) / (epoch + 1)
+                epoch_entropy += (entropy.item() - epoch_entropy) / (epoch + 1)
+                epoch_total_loss += (loss.item() - epoch_total_loss) / (epoch + 1)
+
+        if logs_path is not None:
+            logger.add_scalar('Loss/Policy', epoch_policy_loss, epoch)
+            logger.add_scalar('Loss/Value', epoch_value_loss, epoch)
+            logger.add_scalar('Entropy', epoch_entropy, epoch)
+            logger.add_scalar('Loss/Total', epoch_total_loss, epoch)
+            final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
+            final_x0s = tensorboard_image_process(final_x0s)
+            logger.add_image('Diffusion Samples', final_x0s, epoch)
+            
+            logger.add_scalar('Episode Stats / Terminal Rewards', debug_dict['terminal_rewards'].mean().item(), epoch) # Log the average terminal reward across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Terminal Rewards Std', debug_dict['terminal_rewards'].std().item(), epoch) # Log the std of terminal rewards across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Terminal Rewards Max', debug_dict['terminal_rewards'].max().item(), epoch) # Log the max terminal reward across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Terminal Rewards Min', debug_dict['terminal_rewards'].min().item(), epoch) # Log the min terminal reward across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Terminal Rewards Median', debug_dict['terminal_rewards'].median().item(), epoch) # Log the median terminal reward across the batch at the end of the episode
+
+            logger.add_scalar('Episode Stats / Episode Lengths', debug_dict['episode_lengths'].mean().item(), epoch) # Log the average episode length across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Episode Lengths Std', debug_dict['episode_lengths'].std().item(), epoch) # Log the std of episode lengths across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Episode Lengths Max', debug_dict['episode_lengths'].max().item(), epoch) # Log the max episode length across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Episode Lengths Min', debug_dict['episode_lengths'].min().item(), epoch) # Log the min episode length across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Episode Lengths Median', debug_dict['episode_lengths'].median().item(), epoch) # Log the median episode length across the batch at the end of the episode
+
+            
+            logger.add_scalar('Episode Stats / Final Alphas', debug_dict['final_alphas'].mean().item(), epoch) # Log the average final alpha across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Final Alphas Std', debug_dict['final_alphas'].std().item(), epoch) # Log the std of final alphas across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Final Alphas Max', debug_dict['final_alphas'].max().item(), epoch) # Log the max final alpha across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Final Alphas Min', debug_dict['final_alphas'].min().item(), epoch) # Log the min final alpha across the batch at the end of the episode
+            logger.add_scalar('Episode Stats / Final Alphas Median', debug_dict['final_alphas'].median().item(), epoch) # Log the median final alpha across the batch at the end of the episode 
+
+
+
+            # debug statistics about policy outputs
+            # debug_dict = {}
+            
+            for key, value in rollout_buffer.items():
+                logger.add_scalar(f'Rollout/{key}_mean', value.mean().item(), epoch)
+                logger.add_scalar(f'Rollout/{key}_std', value.std().item(), epoch)
+                logger.add_scalar(f'Rollout/{key}_min', value.min().item(), epoch)
+                logger.add_scalar(f'Rollout/{key}_max', value.max().item(), epoch)
+                logger.add_scalar(f'Rollout/{key}_median', value.median().item(), epoch)
+
+
+
+        if save_path is not None:
+            torch.save(ppo_agent.state_dict(), os.path.join(save_path, 'ppo_agent.pth'))
 
 
 if __name__ == "__main__":
@@ -190,6 +265,12 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64, 128], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[512, 256, 64], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate for optimizer')
+    parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
+    parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
+    parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
+    parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
+    parser.add_argument('--num_ppo_epochs', type=int, default=1, help='Number of PPO epochs to perform for each update')
     args = parser.parse_args()
 
 
@@ -203,13 +284,15 @@ if __name__ == "__main__":
         raise ValueError("Unsupported dataset. Choose from: CIFAR10, MNIST, CelebAHQ")
     
     dataset_path = args.base_dataset_path + args.dataset
+    logs_path = args.base_logs_path + f"tensorboard/{args.dataset}/"
     save_path = args.base_logs_path + f"checkpoints/{args.dataset}/"
     logs_path_AE = args.base_logs_path + f"tensorboard/{args.dataset}/"
     diffusion_path = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
     ae_path = args.base_AE + f"checkpoints/{args.dataset}/"
 
+    os.makedirs(save_path, exist_ok=True)
+    os.makedirs(logs_path, exist_ok=True)
 
-    dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size)
 
     autoencoder = torch.load(os.path.join(ae_path, f'ae.pth'), map_location=device).eval() # Load the entire AE class instance and set to eval mode
     iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
@@ -223,4 +306,12 @@ if __name__ == "__main__":
                          projection_dims=args.projection_dims, 
                          action_dim=1).to(device)
 
-    train_PPO(env, ppo_agent)
+    train_PPO(env, ppo_agent, 
+            num_epochs=args.num_epochs, 
+            target_steps=args.target_steps, 
+            minibatch_size=args.minibatch_size, 
+            num_ppo_epochs=args.num_ppo_epochs,
+            lr=args.lr, weight_decay=args.weight_decay,
+            entropy_coef=args.entropy_coef,
+            denorm_fn=denorm_fn, 
+            logs_path=logs_path, save_path=save_path)
