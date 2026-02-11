@@ -1,11 +1,26 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from typing import List
 from torch.distributions import Normal
+import numpy as np
+
+
+EPSILON = 1e-6
+LOG_MIN = -20
+LOG_MAX = 2
 
 class PPOAgent(nn.Module):
-    def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int], action_dim:int):
+    def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int], action_dim:int, act_min:float=0.0, act_max:float=1.0, log_std_init:float=-2.0):
         super(PPOAgent, self).__init__()
+
+
+        self.register_buffer('act_min', torch.tensor(act_min, dtype=torch.float32))
+        self.register_buffer('act_max', torch.tensor(act_max, dtype=torch.float32))
+        self.register_buffer('act_scale', torch.tensor((act_max - act_min) / 2.0, dtype=torch.float32))
+        self.register_buffer('act_bias', torch.tensor((act_max + act_min) / 2.0, dtype=torch.float32))
+
         self.time_encoder = nn.ModuleList()
         input_dim = 2 # alpha and steps
         for i in range(len(time_encoder_dims)):
@@ -36,6 +51,10 @@ class PPOAgent(nn.Module):
         self.action_mean = nn.Linear(input_dim, action_dim)
         self.action_log_std = nn.Linear(input_dim, action_dim)
 
+        # # initialize log_std
+        # nn.init.normal_(self.action_log_std.weight, mean=0.0, std=0.01)
+        # nn.init.normal_(self.action_log_std.bias, mean=log_std_init, std=0.1)
+
         self.critic = nn.Linear(input_dim, 1)
     
     def backbone(self, state, alpha, steps):
@@ -58,20 +77,59 @@ class PPOAgent(nn.Module):
         
         return combined
     
+
+    def _tanh_squash_correction(self, unsquashed_action):
+        """
+        Compute the log probability correction for tanh squashing.
+        
+        Uses OpenAI Spinning Up's numerically stable formula:
+        correction = 2 * (log(2) - u - softplus(-2*u))
+        
+        where u is the unsquashed action.
+        
+        This is equivalent to log(1 - tanh²(u)) but more numerically stable.
+        
+        Derivation:
+        -----------
+        1. We want: log(1 - tanh²(u))
+        2. Since 1 - tanh²(u) = 4/(e^u + e^(-u))²
+        3. log(1 - tanh²(u)) = log(4) - 2*log(e^u + e^(-u))
+        4. Using logsumexp: log(e^u + e^(-u)) = u + log(1 + e^(-2u)) = u + softplus(-2u)
+        5. Therefore: log(1 - tanh²(u)) = 2*log(2) - 2*(u + softplus(-2u))
+                                         = 2*(log(2) - u - softplus(-2u))
+        
+        For multi-dimensional actions, we sum over action dimensions.
+        We also need to account for scaling from [-1,1] to [act_min, act_max].
+        """
+        # Correction for tanh squashing: 2*(log(2) - u - softplus(-2*u))
+        correction = 2.0 * (np.log(2) - unsquashed_action - F.softplus(-2.0 * unsquashed_action))
+        correction = correction.sum(dim=-1)
+        
+        # Additional correction for scaling from [-1,1] to [act_min, act_max]
+        # When we scale by act_scale, we need to subtract log(act_scale) for each dimension
+        scale_correction = torch.log(self.act_scale) * unsquashed_action.shape[-1]
+        
+        return correction - scale_correction
+    
     def forward(self, state, alpha, steps, deterministic=False):
         combined = self.backbone(state, alpha, steps)
         
         action_mean = self.action_mean(combined)
         action_log_std = self.action_log_std(combined)
+        action_log_std = torch.clamp(action_log_std, -20, 2) # clamp log std for numerical stability
+
         
         probs = Normal(action_mean, torch.exp(action_log_std))
         value = self.critic(combined)
         
         if deterministic:
-            action = action_mean
+            unsquashed_action = action_mean
         else:
-            action = probs.rsample() # reparameterization trick for sampling
-        log_prob = probs.log_prob(action).sum(dim=-1) # sum log probs if action_dim > 1 
+            unsquashed_action = probs.rsample() # reparameterization trick for sampling
+        log_prob = probs.log_prob(unsquashed_action).sum(dim=-1) # sum log probs if action_dim > 1 
+        log_prob -= self._tanh_squash_correction(unsquashed_action)
+
+        action = torch.tanh(unsquashed_action) * self.act_scale + self.act_bias
 
         return action, value.squeeze(-1), log_prob
     
@@ -80,15 +138,28 @@ class PPOAgent(nn.Module):
         
         action_mean = self.action_mean(combined)
         action_log_std = self.action_log_std(combined)
+        action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX) # clamp log std for numerical stability
         
         probs = Normal(action_mean, torch.exp(action_log_std))
         value = self.critic(combined)
 
-        log_prob = probs.log_prob(actions).sum(dim=-1) # sum log probs if action_dim > 1 
-        entropy = probs.entropy().sum(dim=-1) # sum entropy if action_dim > 1
+        # Unsquash actions: u = atanh((a - act_bias) / act_scale)
+        normalized = (actions - self.act_bias) / self.act_scale
+        # Clamp to valid tanh range to avoid numerical issues
+        normalized = torch.clamp(normalized, -1.0 + EPSILON, 1.0 - EPSILON)
+        unsquashed_actions = torch.atanh(normalized)
+        
+        # Compute log probability in unsquashed space
+        log_prob = probs.log_prob(unsquashed_actions).sum(dim=-1)
+        
+        # Apply tanh squashing correction
+        log_prob = log_prob - self._tanh_squash_correction(unsquashed_actions)
+        
+        # Entropy is computed in the unsquashed space
+        # (the entropy of the base Gaussian distribution)
+        entropy = probs.entropy().sum(dim=-1)
 
         return log_prob, value.squeeze(-1), entropy
-    
 
 if __name__ == "__main__":
     # device

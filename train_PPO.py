@@ -24,7 +24,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
 
     obs = env.reset()
     T = env.budget
-    B = env.x1.shape[0]
+    B = env.x0.shape[0]
 
     # pre-allocate tensors for the rollout
     b_states = torch.zeros((T, B, obs['x0_encoded'].shape[1]), device=env.device)
@@ -265,12 +265,13 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64, 128], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[512, 256, 64], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
+    parser.add_argument('--entropy_coef', type=float, default=1e-3, help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs', type=int, default=1, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--sample_multiplier', type=int, default=16, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     args = parser.parse_args()
 
 
@@ -297,8 +298,8 @@ if __name__ == "__main__":
     autoencoder = torch.load(os.path.join(ae_path, f'ae.pth'), map_location=device).eval() # Load the entire AE class instance and set to eval mode
     iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
 
-    dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size)
-    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, budget=args.budget)
+    dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
+    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, budget=args.budget, sample_multiplier=args.sample_multiplier)
 
     ppo_agent = PPOAgent(state_dim=autoencoder.latent_dim, 
                          fused_dims=args.fused_dims, 

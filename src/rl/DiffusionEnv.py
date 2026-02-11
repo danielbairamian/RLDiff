@@ -2,7 +2,7 @@ import torch
 
 
 class DiffusionEnv:
-    def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10):
+    def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10, sample_multiplier=16):
         self.dataloader = dataloader
         self.iadb_model = iadb_model
         self.AE = AE
@@ -11,6 +11,7 @@ class DiffusionEnv:
         self.order = order
         self.budget = budget
         self.step_count = 0
+        self.sample_multiplier = sample_multiplier # how many x0 samples to generate per x1 sample, to increase batch size for RL training
 
     @torch.no_grad()
     def step(self, action):
@@ -71,11 +72,12 @@ class DiffusionEnv:
 
         # x0 shape: (B, C, H, W)
         self.x0 = torch.randn_like(self.x1).to(self.device)
+        self.x0 = self.x0[:self.x1.shape[0]//self.sample_multiplier] # ensure x0 and x1 have the same batch size
         # x0_encoded shape: (B, latent_dim)
         self.x0_encoded = self.AE.encode(self.x0)
-        self.alpha = torch.zeros(self.x1.shape[0], device=self.device) # Start at alpha=0 (x0)
-        self.dones = torch.zeros(self.x1.shape[0], dtype=torch.bool, device=self.device)
-        self.steps = torch.zeros(self.x1.shape[0], dtype=torch.int, device=self.device)
+        self.alpha = torch.zeros(self.x0.shape[0], device=self.device) # Start at alpha=0 (x0)
+        self.dones = torch.zeros(self.x0.shape[0], dtype=torch.bool, device=self.device)
+        self.steps = torch.zeros(self.x0.shape[0], dtype=torch.int, device=self.device)
         return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
 
 
