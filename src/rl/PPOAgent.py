@@ -150,11 +150,7 @@ class PPOAgent(nn.Module):
     
     def evaluate_actions(self, state, alpha, steps, actions):
         combined = self.backbone(state, alpha, steps)
-        
-        if actions.dim() == 1:
-            actions = actions.unsqueeze(-1)  # Ensure actions have shape (B, action_dim)
 
-        print("COMBINED", combined.shape)
         action_mean = self.action_mean(combined)
         action_log_std = self.action_log_std(combined)
         action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX) # clamp log std for numerical stability
@@ -167,16 +163,12 @@ class PPOAgent(nn.Module):
         # Clamp to valid tanh range to avoid numerical issues
         normalized = torch.clamp(normalized, -1.0 + EPSILON, 1.0 - EPSILON)
         unsquashed_actions = torch.atanh(normalized)
-
-        print("UNSQUASHED ACTIONS", unsquashed_actions.shape)
         
         # Compute log probability in unsquashed space
         log_prob = probs.log_prob(unsquashed_actions).sum(dim=-1)
-        print("LOG PROB BEFORE CORRECTION BEFORE SUM", probs.log_prob(unsquashed_actions).shape)
-        print("LOG PROB BEFORE CORRECTION", log_prob.shape)
+        
         # Apply tanh squashing correction
         log_prob = log_prob - self._tanh_squash_correction(unsquashed_actions)
-        print("LOG PROB AFTER CORRECTION", log_prob.shape)
         
         # Entropy is computed in the unsquashed space
         # (the entropy of the base Gaussian distribution)

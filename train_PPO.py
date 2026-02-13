@@ -30,13 +30,13 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     b_states = torch.zeros((T, B, obs['x0_encoded'].shape[1]), device=env.device)
     b_alphas = torch.zeros((T, B), device=env.device)
     b_steps = torch.zeros((T, B), device=env.device)
-    b_actions = torch.zeros((T, B), device=env.device)
+    b_actions = torch.zeros((T, B, 1), device=env.device)
     b_logprobs = torch.zeros((T, B), device=env.device)
     b_rewards = torch.zeros((T, B), device=env.device)
     b_dones = torch.zeros((T, B), device=env.device)
     b_values = torch.zeros((T, B), device=env.device)
-    b_action_means = torch.zeros((T, B), device=env.device) # for debugging and analysis purposes
-    b_action_log_stds = torch.zeros((T, B), device=env.device) # for debugging and analysis purposes
+    b_action_means = torch.zeros((T, B, 1), device=env.device) # for debugging and analysis purposes
+    b_action_log_stds = torch.zeros((T, B, 1), device=env.device) # for debugging and analysis purposes
     final_x0s = None
     terminal_rewards = None
     final_alphas = None
@@ -54,13 +54,13 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         b_states[t] = obs['x0_encoded']
         b_alphas[t] = obs['alpha']
         b_steps[t] = obs['steps'] / env.budget  # Normalize steps to [0, 1]
-        b_actions[t] = action.squeeze(-1)  # Store action without the last dimension
+        b_actions[t] = action  # Store action without the last dimension
         b_logprobs[t] = logprob
         b_rewards[t] = rewards
         b_dones[t] = dones
         b_values[t] = value
-        b_action_means[t] = action_mean.squeeze(-1) # Store action mean without the last dimension
-        b_action_log_stds[t] = action_log_std.squeeze(-1) # Store action log std without the last dimension
+        b_action_means[t] = action_mean # Store action mean without the last dimension
+        b_action_log_stds[t] = action_log_std # Store action log std without the last dimension
 
         obs = next_obs
         if dones.all():
