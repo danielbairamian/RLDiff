@@ -47,32 +47,30 @@ class DiffusionEnv:
         self.dones = self.dones | (self.alpha >= 1.0) | (self.steps >= self.budget)
         
         # encode the new x0 in the latent space using the AE encoder
-        self.encoded_x0 = self.AE.encode(self.x0)
+        self.x0_encoded = self.AE.encode(self.x0)
 
 
         # L2 REWARD
 
 
-        # # compute pairwise distances in the latent space between x0 and x1
-        # # self.encoded_x0 shape: (B, latent_dim)
-        # # self.x1_encoded shape: (B, latent_dim)
-        # # dist shape: (B, B) where dist[i,j] is the distance between encoded_x0[i] and x1_encoded[j]
-        # dist = torch.cdist(self.encoded_x0, self.x1_encoded, p=2)
+        # compute pairwise distances in the latent space between x0 and x1
+        # self.x0_encoded shape: (B, latent_dim)
+        # self.x1_encoded shape: (B, latent_dim)
+        # dist shape: (B, B) where dist[i,j] is the distance between x0_encoded[i] and x1_encoded[j]
+        # dist = torch.cdist(self.x0_encoded, self.x1_encoded, p=2)
         # # for each sample in the batch, find the minimum distance to any of the x1 samples
         # min_dist, _ = torch.min(dist, dim=-1)
         # min_dist *= 1e-2 # scale down the distance to keep rewards in a reasonable range
 
         # # rewards = torch.log1p(min_dist)
         # rewards = -min_dist # we want to minimize the distance, so we take the negative log distance as the reward
-        # # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)
-        # # if the episode timed out (steps >= budget), we still give the reward based on the final distance to x1
-
+    
         # # COSINE SIM REWARD
 
         # # compute cosine similarity in the latent space between x0 and x1
-        # # self.encoded_x0 shape: (B, latent_dim)
+        # # self.x0_encoded shape: (B, latent_dim)
         # # self.x1_encoded shape: (B, latent_dim)
-        # z_x0 = F.normalize(self.encoded_x0, dim=-1)
+        # z_x0 = F.normalize(self.x0_encoded, dim=-1)
         # z_x1 = F.normalize(self.x1_encoded, dim=-1)
 
         # cosine_sim_matrix = torch.mm(z_x0, z_x1.t())  # Shape: (B, B)
@@ -104,9 +102,18 @@ class DiffusionEnv:
         rewards, _ = torch.max(correlation_matrix, dim=1)
 
 
+        # # intrinsic reward: decoder consistency
+        # x0_decoded = self.AE.decode(self.x0_encoded)
+        # reconstruction_error = F.l1_loss(x0_decoded, self.x0, reduction='none').mean(dim=[1,2,3]) # shape: (B,)
+        # intrinsic_reward = -reconstruction_error # we want to minimize reconstruction error, so intrinsic reward is negative error
+        # rewards = rewards + intrinsic_reward # combine extrinsic
+        
+        
+        # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)
+        # if the episode timed out (steps >= budget), we still give the reward based on the final distance to x1
         rewards = rewards * (self.dones).float()
 
-        return {'x0_encoded': self.encoded_x0, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
+        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
 
     @torch.no_grad()
     def reset(self):
@@ -130,3 +137,84 @@ class DiffusionEnv:
         self.dones = torch.zeros(self.x0.shape[0], dtype=torch.bool, device=self.device)
         self.steps = torch.zeros(self.x0.shape[0], dtype=torch.int, device=self.device)
         return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
+
+
+
+if __name__ == "__main__":
+    # --- DUMMY CLASSES ---
+    class DummyAE(nn.Module):
+        def __init__(self, latent_dim=512):
+            super().__init__()
+            self.latent_dim = latent_dim
+            
+        def encode(self, x):
+            # Outputs a random latent vector of the correct shape [B, Latent_Dim]
+            return torch.ones(x.shape[0], self.latent_dim, device=x.device)
+            
+        def decode(self, z):
+            # Outputs a random image of the correct shape [B, 3, 32, 32]
+            return torch.ones(z.shape[0], 3, 32, 32, device=z.device)
+
+    class DummyIADB(nn.Module):
+        def forward(self, x, alpha):
+            # The diffusion model predicts a direction 'd' of the same shape as the image
+            return {'sample': torch.randn_like(x)}
+
+    # --- DUMMY DATA ---
+    # Creates a simple list that acts as an iterator yielding (image_batch, labels)
+    batch_size = 32
+    sample_mult = 4
+    img_channels, img_size = 3, 32
+    dummy_dataloader = [(torch.randn(batch_size, img_channels, img_size, img_size), None) for _ in range(10)]
+
+    # --- INITIALIZATION ---
+    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+    print(f"Testing on device: {device}\n")
+
+    ae = DummyAE(latent_dim=512).to(device)
+    iadb = DummyIADB().to(device)
+
+    env = DiffusionEnv(
+        dataloader=dummy_dataloader,
+        iadb_model=iadb,
+        AE=ae,
+        device=device,
+        order=1,
+        budget=10,
+        sample_multiplier=sample_mult
+    )
+
+    # --- RUN LOCAL TEST ---
+    print("--- Testing Reset ---")
+    obs = env.reset()
+    expected_x0_batch = batch_size // sample_mult
+    
+    print(f"Real Image Batch (x1): {env.x1.shape}")
+    print(f"Generated Image Batch (x0): {obs['x0'].shape}")
+    print(f"Latent Shape (x0_encoded): {obs['x0_encoded'].shape}")
+    print(f"Alpha Initial: {obs['alpha']}\n")
+
+    assert obs['x0'].shape[0] == expected_x0_batch, "Sample multiplier slicing failed."
+
+    print("--- Testing Step ---")
+    # Dummy action: Agent wants to take a step size of ~0.1
+    dummy_actions = torch.rand(expected_x0_batch, device=device) * 0.2 
+    
+    next_obs, rewards, dones = env.step(dummy_actions)
+    
+    print(f"Actions Taken: {dummy_actions}")
+    print(f"New Alphas: {next_obs['alpha']}")
+    print(f"Rewards: {rewards}")
+    print(f"Dones: {dones}\n")
+    
+    print("--- Testing Episode Loop (Fast-Forward to Done) ---")
+    # Force the environment to hit the budget
+    for _ in range(10):
+        next_obs, rewards, dones = env.step(dummy_actions)
+        if dones.all():
+            break
+            
+    print(f"Final Alphas: {next_obs['alpha']}")
+    print(f"Final Rewards: {rewards}")
+    print(f"Final Steps: {next_obs['steps']}")
+    print("Test Complete. No crashes!")

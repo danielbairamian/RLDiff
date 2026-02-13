@@ -113,7 +113,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         'states': b_states, 'alphas': b_alphas, 'steps': b_steps,
         'actions': b_actions, 'logprobs': b_logprobs, 'advantages': b_advantages,
         'returns': b_returns, 'dones': b_dones, 'values': b_values,
-        'action_means': b_action_means, 'action_log_stds': b_action_log_stds,
+        'action_means': b_action_means, 'action_stds': torch.exp(b_action_log_stds),
     }.items()}
     
     # Episode length = number of steps taken (count active steps per trajectory)
@@ -184,11 +184,23 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
         # 3. Maximum of the two losses
         value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
+        # out of bound loss
+        alphas = minibatch['alphas']
+        # dynamic_max = 1.0 - alphas
+        dynamic_max = torch.ones_like(alphas) # disable dynamic max for now since
 
-        yield policy_loss, value_loss, entropy.mean()
+        dynamic_min = torch.zeros_like(alphas)
 
-def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, denorm_fn=None, logs_path=None, save_path=None):
+        upper_bound_violation = F.relu(minibatch['actions'].squeeze(-1) - dynamic_max)
+        lower_bound_violation = F.relu(dynamic_min - minibatch['actions'].squeeze(-1))
+        out_of_bound_loss = (upper_bound_violation**2 + lower_bound_violation**2).mean()
 
+
+        yield policy_loss, value_loss, entropy.mean(), out_of_bound_loss
+
+def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, oob_coef=1.0, denorm_fn=None, logs_path=None, save_path=None):
+
+    print(f"Training PPO for {num_epochs} epochs with target_steps={target_steps}, minibatch_size={minibatch_size}, num_ppo_epochs={num_ppo_epochs}, lr={lr}, weight_decay={weight_decay}, entropy_coef={entropy_coef}, oob_coef={oob_coef}")
     optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
     logger = SummaryWriter(logs_path)
 
@@ -197,6 +209,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
         epoch_value_loss = 0.0
         epoch_entropy = 0.0
         epoch_total_loss = 0.0
+        epoch_oob_loss = 0.0
 
         rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
 
@@ -206,9 +219,9 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             for key in rollout_buffer.keys():
                 rollout_buffer[key] = rollout_buffer[key][perm]
 
-            for policy_loss, value_loss, entropy in ppo_update(ppo_agent, minibatch_size, full_rollout=rollout_buffer):
+            for policy_loss, value_loss, entropy, out_of_bound_loss in ppo_update(ppo_agent, minibatch_size, full_rollout=rollout_buffer):
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss - entropy_coef * entropy
+                loss = policy_loss + value_loss - entropy_coef * entropy + oob_coef * out_of_bound_loss
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5) # gradient clipping for stability
                 optimizer.step()
@@ -217,15 +230,23 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                 epoch_value_loss += (value_loss.item() - epoch_value_loss) / (epoch + 1)
                 epoch_entropy += (entropy.item() - epoch_entropy) / (epoch + 1)
                 epoch_total_loss += (loss.item() - epoch_total_loss) / (epoch + 1)
+                epoch_oob_loss += (out_of_bound_loss.item() - epoch_oob_loss) / (epoch + 1)
+
+        test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
 
         if logs_path is not None:
             logger.add_scalar('Loss/Policy', epoch_policy_loss, epoch)
             logger.add_scalar('Loss/Value', epoch_value_loss, epoch)
-            logger.add_scalar('Entropy', epoch_entropy, epoch)
+            logger.add_scalar('Loss/Entropy', epoch_entropy, epoch)
             logger.add_scalar('Loss/Total', epoch_total_loss, epoch)
+            logger.add_scalar('Loss/OutOfBound', epoch_oob_loss, epoch)
             final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
             final_x0s = tensorboard_image_process(final_x0s)
             logger.add_image('Diffusion Samples', final_x0s, epoch)
+
+            final_x0s_test = denorm_fn(debug_dict_test['final_x0s']) if denorm_fn is not None else debug_dict_test['final_x0s']
+            final_x0s_test = tensorboard_image_process(final_x0s_test)
+            logger.add_image('Diffusion Samples Test', final_x0s_test, epoch)
             
             for key, value in debug_dict.items():
                 if value is None:
@@ -237,12 +258,29 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                     logger.add_scalar(f'Episode Stats / {key}_min', value.min().item(), epoch)
                     logger.add_scalar(f'Episode Stats / {key}_median', value.median().item(), epoch)
             
+            for key, value in debug_dict_test.items():
+                if value is None:
+                    continue
+                else:
+                    logger.add_scalar(f'Test Episode Stats / {key}_mean', value.mean().item(), epoch)
+                    logger.add_scalar(f'Test Episode Stats / {key}_std', value.std().item(), epoch)
+                    logger.add_scalar(f'Test Episode Stats / {key}_max', value.max().item(), epoch)
+                    logger.add_scalar(f'Test Episode Stats / {key}_min', value.min().item(), epoch)
+                    logger.add_scalar(f'Test Episode Stats / {key}_median', value.median().item(), epoch)
+            
             for key, value in rollout_buffer.items():
                 logger.add_scalar(f'Rollout/{key}_mean', value.mean().item(), epoch)
                 logger.add_scalar(f'Rollout/{key}_std', value.std().item(), epoch)
                 logger.add_scalar(f'Rollout/{key}_min', value.min().item(), epoch)
                 logger.add_scalar(f'Rollout/{key}_max', value.max().item(), epoch)
                 logger.add_scalar(f'Rollout/{key}_median', value.median().item(), epoch)
+            
+            for key, value in test_rollout.items():
+                logger.add_scalar(f'Test Rollout/{key}_mean', value.mean().item(), epoch)
+                logger.add_scalar(f'Test Rollout/{key}_std', value.std().item(), epoch)
+                logger.add_scalar(f'Test Rollout/{key}_min', value.min().item(), epoch)
+                logger.add_scalar(f'Test Rollout/{key}_max', value.max().item(), epoch)
+                logger.add_scalar(f'Test Rollout/{key}_median', value.median().item(), epoch)
 
 
 
@@ -268,16 +306,17 @@ if __name__ == "__main__":
     parser.add_argument('--base_logs_path', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/IADB/', help='Base path for logs and checkpoints')
     parser.add_argument('--base_path_diffusion', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/IADB/', help='Base path for logs and checkpoints')
     parser.add_argument('--base_AE', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/AE/', help='Base path for logs and checkpoints')
-    parser.add_argument('--fused_dims', type=int, default=256, help='Dimension of the fused state-time representation')
-    parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64, 128], help='List of output dimensions for each layer in the time encoder')
-    parser.add_argument('--projection_dims', type=int, nargs='+', default=[512, 256, 64], help='List of output dimensions for each layer in the projection encoder')
+    parser.add_argument('--fused_dims', type=int, default=64, help='Dimension of the fused state-time representation')
+    parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64], help='List of output dimensions for each layer in the time encoder')
+    parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef', type=float, default=1e-4, help='Entropy coefficient for PPO')
+    parser.add_argument('--lr', type=float, default=5e-5, help='Learning rate for optimizer')
+    parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
+    parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
+    parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=10, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=16, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     args = parser.parse_args()
 
@@ -312,7 +351,8 @@ if __name__ == "__main__":
                          fused_dims=args.fused_dims, 
                          time_encoder_dims=args.time_encoder_dims, 
                          projection_dims=args.projection_dims, 
-                         action_dim=1).to(device)
+                         action_dim=1,
+                         mean_action_init=(1.0/env.budget)).to(device)
 
     train_PPO(env, ppo_agent, 
             num_epochs=args.num_epochs, 
@@ -321,5 +361,6 @@ if __name__ == "__main__":
             num_ppo_epochs=args.num_ppo_epochs,
             lr=args.lr, weight_decay=args.weight_decay,
             entropy_coef=args.entropy_coef,
+            oob_coef=args.oob_coef,
             denorm_fn=denorm_fn, 
             logs_path=logs_path, save_path=save_path)
