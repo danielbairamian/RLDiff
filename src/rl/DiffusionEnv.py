@@ -1,18 +1,24 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import lpips
 
 class DiffusionEnv:
-    def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10, sample_multiplier=16):
+    def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10, sample_multiplier=16, denorm_fn=None):
         self.dataloader = dataloader
         self.iadb_model = iadb_model
         self.AE = AE
         self.device = device
         self.dataloader_iterator = iter(self.dataloader)
+        self.denorm_fn = denorm_fn
         self.order = order
         self.budget = budget
-        self.step_count = 0
         self.sample_multiplier = sample_multiplier # how many x0 samples to generate per x1 sample, to increase batch size for RL training
+        
+        # LPIPS perceptual loss network (lower = more similar)
+        self.lpips_net = lpips.LPIPS(net='vgg', verbose=False).to(device).eval()
+        for param in self.lpips_net.parameters():
+            param.requires_grad = False
 
     @torch.no_grad()
     def step(self, action):
@@ -49,69 +55,26 @@ class DiffusionEnv:
         # encode the new x0 in the latent space using the AE encoder
         self.x0_encoded = self.AE.encode(self.x0)
 
-
-        # L2 REWARD
-
-
-        # compute pairwise distances in the latent space between x0 and x1
-        # self.x0_encoded shape: (B, latent_dim)
-        # self.x1_encoded shape: (B, latent_dim)
-        # dist shape: (B, B) where dist[i,j] is the distance between x0_encoded[i] and x1_encoded[j]
-        # dist = torch.cdist(self.x0_encoded, self.x1_encoded, p=2)
-        # # for each sample in the batch, find the minimum distance to any of the x1 samples
-        # min_dist, _ = torch.min(dist, dim=-1)
-        # min_dist *= 1e-2 # scale down the distance to keep rewards in a reasonable range
-
-        # # rewards = torch.log1p(min_dist)
-        # rewards = -min_dist # we want to minimize the distance, so we take the negative log distance as the reward
-    
-        # # COSINE SIM REWARD
-
-        # # compute cosine similarity in the latent space between x0 and x1
-        # # self.x0_encoded shape: (B, latent_dim)
-        # # self.x1_encoded shape: (B, latent_dim)
-        # z_x0 = F.normalize(self.x0_encoded, dim=-1)
-        # z_x1 = F.normalize(self.x1_encoded, dim=-1)
-
-        # cosine_sim_matrix = torch.mm(z_x0, z_x1.t())  # Shape: (B, B)
-
-        # # for each sample in the batch, find the maximum cosine similarity to any of the x1 samples
-        # max_cosine_sim, _ = torch.max(cosine_sim_matrix, dim=-1)
-        # rewards = max_cosine_sim
-
-
-        # --- PEARSON CORRELATION REWARD ---
+        # LPIPS perceptual reward computation
+        # LPIPS expects inputs in [-1, 1] range
+        x0_lpips = self.denorm_fn(self.x0) * 2 - 1  # [0,1] -> [-1,1]
+        x1_lpips = self.denorm_fn(self.x1) * 2 - 1  # shape: (B_x1, C, H, W)
         
-        # 1. Center the vectors (Subtract the mean of EACH vector individually)
-        # We compute mean along dim=1 (the feature dimension 512)
-        gen_mean = self.x0_encoded.mean(dim=1, keepdim=True)
-        real_mean = self.x1_encoded.mean(dim=1, keepdim=True)
-        
-        z_gen_centered = self.x0_encoded - gen_mean
-        z_real_centered = self.x1_encoded - real_mean
-        
-        # 2. Normalize the CENTERED vectors
-        z_gen_norm = F.normalize(z_gen_centered, p=2, dim=1)
-        z_real_norm = F.normalize(z_real_centered, p=2, dim=1)
-        
-        # 3. Compute Cosine on Centered vectors (= Pearson Correlation)
-        # Result is strictly [-1, 1], measuring purely linear correlation
-        correlation_matrix = torch.mm(z_gen_norm, z_real_norm.t())
-        
-        # Nearest Neighbor in Correlation Space
-        rewards, _ = torch.max(correlation_matrix, dim=1)
+        gen_mean = self.x0_encoded.mean(dim=0, keepdim=True)  # (1, latent_dim)
+        real_mean = self.x1_encoded.mean(dim=0, keepdim=True)  # (1, latent_dim)
 
+        z_gen_centered = self.x0_encoded - gen_mean  # (B_x0, latent_dim)
+        z_real_centered = self.x1_encoded - real_mean  # (B_x1, latent_dim)
 
-        # # intrinsic reward: decoder consistency
-        # x0_decoded = self.AE.decode(self.x0_encoded)
-        # reconstruction_error = F.l1_loss(x0_decoded, self.x0, reduction='none').mean(dim=[1,2,3]) # shape: (B,)
-        # intrinsic_reward = -reconstruction_error # we want to minimize reconstruction error, so intrinsic reward is negative error
-        # rewards = rewards + intrinsic_reward # combine extrinsic
+        correlation_matrix = torch.matmul(z_gen_centered, z_real_centered.T)  # (B_x0, B_x1)
+        _, correlation_indices = correlation_matrix.max(dim=1)  # (B_x0,)   
         
+        nearest_x1_lpips = x1_lpips[correlation_indices]  # shape: (B_x0, C, H, W)
+        lpips_dist = self.lpips_net(x0_lpips, nearest_x1_lpips).squeeze()  # shape: (B_x0,)        
+        # lpips_reward = torch.exp(-min_lpips_dist)
+        lpips_reward = -lpips_dist  # Using negative distance directly as reward, since LPIPS is already a perceptual similarity metric where lower is better
         
-        # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)
-        # if the episode timed out (steps >= budget), we still give the reward based on the final distance to x1
-        rewards = rewards * (self.dones).float()
+        rewards = lpips_reward * (self.dones).float()
 
         return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
 
@@ -173,7 +136,7 @@ if __name__ == "__main__":
 
     ae = DummyAE(latent_dim=512).to(device)
     iadb = DummyIADB().to(device)
-
+    dummy_denorm_fn = lambda x: x.clamp(0, 1)  # Clamp to [0,1] for LPIPS compatibility
     env = DiffusionEnv(
         dataloader=dummy_dataloader,
         iadb_model=iadb,
@@ -181,7 +144,8 @@ if __name__ == "__main__":
         device=device,
         order=1,
         budget=10,
-        sample_multiplier=sample_mult
+        sample_multiplier=sample_mult,
+        denorm_fn=dummy_denorm_fn
     )
 
     # --- RUN LOCAL TEST ---
@@ -217,4 +181,5 @@ if __name__ == "__main__":
     print(f"Final Alphas: {next_obs['alpha']}")
     print(f"Final Rewards: {rewards}")
     print(f"Final Steps: {next_obs['steps']}")
+    print("Test Complete. LPIPS reward working!")
     print("Test Complete. No crashes!")

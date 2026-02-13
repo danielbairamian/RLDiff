@@ -6,6 +6,7 @@ from typing import List
 from torch.distributions import Normal
 import numpy as np  
 
+from src.MonteCarloLayer import MonteCarloLayer
 
 class Backbone_Encoder(nn.Module):
     def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int]):
@@ -75,12 +76,21 @@ class PPOAgent(nn.Module):
         log_std_init = np.log(std_init)
         self.action_log_std = nn.Parameter(torch.full((1, action_dim), log_std_init, dtype=torch.float32))
 
+        # inverse sigmoid for init
+        # sigmoid = 1 / (1 + e^-x) --> x = log(p / (1 - p))
+        # mean_action_init = np.log(mean_action_init / (1 - mean_action_init))
+
         # Initialize action mean to output near mean_action_init
         with torch.no_grad():
-            self.action_mean.bias.fill_(mean_action_init)
+            self.action_mean.bias.normal_(mean_action_init, 0.01)
             self.action_mean.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(self.backbone.backbone_out_dim, 1)
+        self.mc_layer = MonteCarloLayer(self.critic, 
+                                        dropout_p=0.1, mc_samples=256, 
+                                        attention_mode='attention', attend_mode='inputs', 
+                                        num_heads=4, embedding_size=self.backbone.backbone_out_dim//4, 
+                                        query_mode='per_sample')
 
     
     def forward(self, state, alpha, steps, deterministic=False):
@@ -88,12 +98,13 @@ class PPOAgent(nn.Module):
         
         # Mean comes from the network
         action_mean = self.action_mean(combined)
-        
+        # action_mean = torch.sigmoid(action_mean) * (self.act_max - self.act_min) + self.act_min
+
         # Log std is expanded to match the batch size: [1, A] -> [B, A]
         action_log_std = self.action_log_std.expand_as(action_mean)
         
         probs = Normal(action_mean, torch.exp(action_log_std))
-        value = self.critic(combined)
+        value = self.mc_layer.get_mean_only(combined)
         
         if deterministic:
             action = action_mean
@@ -113,16 +124,17 @@ class PPOAgent(nn.Module):
         combined = self.backbone(state, alpha, steps)
 
         action_mean = self.action_mean(combined)
+        # action_mean = torch.sigmoid(action_mean) * (self.act_max - self.act_min) + self.act_min
         action_log_std = self.action_log_std.expand_as(action_mean)
         
         probs = Normal(action_mean, torch.exp(action_log_std))
-        value = self.critic(combined)
+        value = self.mc_layer.get_mean_only(combined)
 
         # Standard Gaussian evaluation against the RAW unclipped actions
         log_prob = probs.log_prob(actions).sum(dim=-1)
         entropy = probs.entropy().sum(dim=-1)
 
-        return log_prob, value.squeeze(-1), entropy
+        return log_prob, value.squeeze(-1), entropy, action_mean, action_log_std
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')

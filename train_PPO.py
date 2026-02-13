@@ -161,7 +161,7 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
 
         minibatch = {key: full_rollout[key][i:i+minibatch_size] for key in full_rollout.keys()}
 
-        new_logprobs, new_values, entropy = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
+        new_logprobs, new_values, entropy, new_action_mean, new_action_log_std = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
         kl = new_logprobs - minibatch['logprobs']
         ratio = torch.exp(kl.clip(-10, 10)) # clip for numerical stability
         surrogate1 = ratio * minibatch['advantages']
@@ -185,14 +185,11 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
         value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
         # out of bound loss
-        alphas = minibatch['alphas']
-        # dynamic_max = 1.0 - alphas
-        dynamic_max = torch.ones_like(alphas) # disable dynamic max for now since
+        act_max_lim = torch.ones_like(new_action_mean)*ppo_agent.act_max    
+        act_min_lim = torch.ones_like(new_action_mean)*ppo_agent.act_min
 
-        dynamic_min = torch.zeros_like(alphas)
-
-        upper_bound_violation = F.relu(minibatch['actions'].squeeze(-1) - dynamic_max)
-        lower_bound_violation = F.relu(dynamic_min - minibatch['actions'].squeeze(-1))
+        upper_bound_violation = F.relu(new_action_mean - act_max_lim)
+        lower_bound_violation = F.relu(act_min_lim - new_action_mean)
         out_of_bound_loss = (upper_bound_violation**2 + lower_bound_violation**2).mean()
 
 
@@ -210,6 +207,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
         epoch_entropy = 0.0
         epoch_total_loss = 0.0
         epoch_oob_loss = 0.0
+        update_count = 0  # Track actual number of minibatch updates
 
         rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
 
@@ -226,11 +224,12 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5) # gradient clipping for stability
                 optimizer.step()
 
-                epoch_policy_loss += (policy_loss.item() - epoch_policy_loss) / (epoch + 1)
-                epoch_value_loss += (value_loss.item() - epoch_value_loss) / (epoch + 1)
-                epoch_entropy += (entropy.item() - epoch_entropy) / (epoch + 1)
-                epoch_total_loss += (loss.item() - epoch_total_loss) / (epoch + 1)
-                epoch_oob_loss += (out_of_bound_loss.item() - epoch_oob_loss) / (epoch + 1)
+                update_count += 1
+                epoch_policy_loss += (policy_loss.item() - epoch_policy_loss) / update_count
+                epoch_value_loss += (value_loss.item() - epoch_value_loss) / update_count
+                epoch_entropy += (entropy.item() - epoch_entropy) / update_count
+                epoch_total_loss += (loss.item() - epoch_total_loss) / update_count
+                epoch_oob_loss += (out_of_bound_loss.item() - epoch_oob_loss) / update_count
 
         test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
 
@@ -310,7 +309,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=5e-5, help='Learning rate for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
     parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
@@ -345,7 +344,7 @@ if __name__ == "__main__":
     iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
 
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
-    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, budget=args.budget, sample_multiplier=args.sample_multiplier)
+    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
 
     ppo_agent = PPOAgent(state_dim=autoencoder.latent_dim, 
                          fused_dims=args.fused_dims, 
