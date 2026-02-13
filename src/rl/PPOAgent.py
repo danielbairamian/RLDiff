@@ -65,10 +65,10 @@ class PPOAgent(nn.Module):
             # Small weights so state dependency builds up gradually
             self.action_mean.weight.normal_(0, 0.01)
         
-        # # Initialize log_std to low exploration
-        # with torch.no_grad():
-        #     self.action_log_std.bias.normal_(log_std_init, 0.1)  # e.g., -2.0 → std ≈ 0.135
-        #     self.action_log_std.weight.normal_(0, 0.01)
+        # Initialize log_std to low exploration
+        with torch.no_grad():
+            self.action_log_std.bias.normal_(log_std_init, 0.1)  # e.g., -2.0 → std ≈ 0.135
+            self.action_log_std.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(input_dim, 1)
     

@@ -1,5 +1,6 @@
 import torch
-
+import torch.nn as nn
+import torch.nn.functional as F
 
 class DiffusionEnv:
     def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10, sample_multiplier=16):
@@ -48,17 +49,61 @@ class DiffusionEnv:
         # encode the new x0 in the latent space using the AE encoder
         self.encoded_x0 = self.AE.encode(self.x0)
 
-        # compute pairwise distances in the latent space between x0 and x1
-        # self.encoded_x0 shape: (B, latent_dim)
-        # self.x1_encoded shape: (B, latent_dim)
-        # dist shape: (B, B) where dist[i,j] is the distance between encoded_x0[i] and x1_encoded[j]
-        dist = torch.cdist(self.encoded_x0, self.x1_encoded, p=2)
-        # for each sample in the batch, find the minimum distance to any of the x1 samples
-        min_dist, _ = torch.min(dist, dim=-1) / self.encoded_x0.shape[-1] # normalize by latent dimension for better scaling of rewards
-        # rewards = torch.log1p(min_dist)
-        rewards = -min_dist # we want to minimize the distance, so we take the negative log distance as the reward
-        # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)
-        # if the episode timed out (steps >= budget), we still give the reward based on the final distance to x1
+
+        # L2 REWARD
+
+
+        # # compute pairwise distances in the latent space between x0 and x1
+        # # self.encoded_x0 shape: (B, latent_dim)
+        # # self.x1_encoded shape: (B, latent_dim)
+        # # dist shape: (B, B) where dist[i,j] is the distance between encoded_x0[i] and x1_encoded[j]
+        # dist = torch.cdist(self.encoded_x0, self.x1_encoded, p=2)
+        # # for each sample in the batch, find the minimum distance to any of the x1 samples
+        # min_dist, _ = torch.min(dist, dim=-1)
+        # min_dist *= 1e-2 # scale down the distance to keep rewards in a reasonable range
+
+        # # rewards = torch.log1p(min_dist)
+        # rewards = -min_dist # we want to minimize the distance, so we take the negative log distance as the reward
+        # # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)
+        # # if the episode timed out (steps >= budget), we still give the reward based on the final distance to x1
+
+        # # COSINE SIM REWARD
+
+        # # compute cosine similarity in the latent space between x0 and x1
+        # # self.encoded_x0 shape: (B, latent_dim)
+        # # self.x1_encoded shape: (B, latent_dim)
+        # z_x0 = F.normalize(self.encoded_x0, dim=-1)
+        # z_x1 = F.normalize(self.x1_encoded, dim=-1)
+
+        # cosine_sim_matrix = torch.mm(z_x0, z_x1.t())  # Shape: (B, B)
+
+        # # for each sample in the batch, find the maximum cosine similarity to any of the x1 samples
+        # max_cosine_sim, _ = torch.max(cosine_sim_matrix, dim=-1)
+        # rewards = max_cosine_sim
+
+
+        # --- PEARSON CORRELATION REWARD ---
+        
+        # 1. Center the vectors (Subtract the mean of EACH vector individually)
+        # We compute mean along dim=1 (the feature dimension 512)
+        gen_mean = self.x0_encoded.mean(dim=1, keepdim=True)
+        real_mean = self.x1_encoded.mean(dim=1, keepdim=True)
+        
+        z_gen_centered = self.x0_encoded - gen_mean
+        z_real_centered = self.x1_encoded - real_mean
+        
+        # 2. Normalize the CENTERED vectors
+        z_gen_norm = F.normalize(z_gen_centered, p=2, dim=1)
+        z_real_norm = F.normalize(z_real_centered, p=2, dim=1)
+        
+        # 3. Compute Cosine on Centered vectors (= Pearson Correlation)
+        # Result is strictly [-1, 1], measuring purely linear correlation
+        correlation_matrix = torch.mm(z_gen_norm, z_real_norm.t())
+        
+        # Nearest Neighbor in Correlation Space
+        rewards, _ = torch.max(correlation_matrix, dim=1)
+
+
         rewards = rewards * (self.dones).float()
 
         return {'x0_encoded': self.encoded_x0, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
@@ -85,41 +130,3 @@ class DiffusionEnv:
         self.dones = torch.zeros(self.x0.shape[0], dtype=torch.bool, device=self.device)
         self.steps = torch.zeros(self.x0.shape[0], dtype=torch.int, device=self.device)
         return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
-
-
-
-if __name__ == "__main__":
-    # device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-    # dummy dataloader
-    dataloader = [(torch.randn(4, 3, 32, 32).to(device), torch.randint(0, 10, (8,)).to(device)) for _ in range(10)]
-    
-    # dummy AE
-    class DummyAE(torch.nn.Module):
-        def __init__(self, input_dim=3072, latent_dim=128):
-            super(DummyAE, self).__init__()
-            # Use a fixed projection so it's deterministic but not just returning 'x'
-            self.proj = torch.nn.Linear(input_dim, latent_dim)
-            torch.nn.init.orthogonal_(self.proj.weight)
-            self.proj.requires_grad_(False)
-
-        def encode(self, x):
-            # x shape: (B, 3, 32, 32) -> flatten to (B, 3072)
-            flat_x = x.view(x.size(0), -1)
-            with torch.no_grad():
-                return self.proj(flat_x)
-
-    AE = DummyAE().to(device)
-    # dummy IADB model
-    class DummyIADBModel(torch.nn.Module):
-        def forward(self, x, alpha):
-            return {'sample': torch.randn_like(x)}
-    iadb_model = DummyIADBModel().to(device)
-
-    env = DiffusionEnv(dataloader, iadb_model, AE, device, budget=10)
-    obs = env.reset()
-    done = torch.zeros(obs['x0_encoded'].shape[0], dtype=torch.bool, device=device)
-    while not done.all():
-        action = torch.randn(obs['alpha'].shape[0]).to(device) * 0.01 # small random action
-        obs, rewards, done = env.step(action)
-        print(f"Rewards: {rewards}, Done: {done}", "Steps: ", obs['steps'], "Alpha: ", obs['alpha'])  

@@ -230,8 +230,6 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             for key, value in debug_dict.items():
                 if value is None:
                     continue
-                if len(value.shape) == 1:  # per-episode stats
-                    logger.add_scalar(f'Episode Stats / {key}', value.mean().item(), epoch)
                 else:
                     logger.add_scalar(f'Episode Stats / {key}_mean', value.mean().item(), epoch)
                     logger.add_scalar(f'Episode Stats / {key}_std', value.std().item(), epoch)
