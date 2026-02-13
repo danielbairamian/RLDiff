@@ -26,7 +26,8 @@ class DiffusionEnv:
         new_alpha = new_alpha.clamp(0, 1)
 
         # if the agent is about to take the last step, and new alpha is < 1.0, we force it to take the last step to ensure the episode ends
-        # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        
         # self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
         # Freeze done episodes - don't update their state
         self.x0 = torch.where(
@@ -53,7 +54,7 @@ class DiffusionEnv:
         # dist shape: (B, B) where dist[i,j] is the distance between encoded_x0[i] and x1_encoded[j]
         dist = torch.cdist(self.encoded_x0, self.x1_encoded, p=2)
         # for each sample in the batch, find the minimum distance to any of the x1 samples
-        min_dist, _ = torch.min(dist, dim=-1)
+        min_dist, _ = torch.min(dist, dim=-1) / self.encoded_x0.shape[-1] # normalize by latent dimension for better scaling of rewards
         # rewards = torch.log1p(min_dist)
         rewards = -min_dist # we want to minimize the distance, so we take the negative log distance as the reward
         # if not done, reward is 0 (we only give a reward at the end of the episode based on how close we got to x1)

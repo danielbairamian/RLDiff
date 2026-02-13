@@ -146,7 +146,7 @@ class PPOAgent(nn.Module):
 
         action = torch.tanh(unsquashed_action) * self.act_scale + self.act_bias
 
-        return action, value.squeeze(-1), log_prob, action_mean, action_log_std
+        return action, value.squeeze(-1), log_prob, torch.tanh(action_mean) * self.act_scale + self.act_bias, action_log_std
     
     def evaluate_actions(self, state, alpha, steps, actions):
         combined = self.backbone(state, alpha, steps)

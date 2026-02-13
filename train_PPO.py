@@ -161,8 +161,6 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
 
         minibatch = {key: full_rollout[key][i:i+minibatch_size] for key in full_rollout.keys()}
 
-        print("MINIBATCH ACTIONS", minibatch['actions'].shape)
-
         new_logprobs, new_values, entropy = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
         kl = new_logprobs - minibatch['logprobs']
         ratio = torch.exp(kl.clip(-10, 10)) # clip for numerical stability
@@ -170,7 +168,22 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
         surrogate2 = torch.clamp(ratio, 1 - PPO_EPSILON, 1 + PPO_EPSILON) * minibatch['advantages'] 
         
         policy_loss = -torch.min(surrogate1, surrogate2).mean()
-        value_loss = F.mse_loss(new_values, minibatch['returns'])
+        
+        # value_loss = F.mse_loss(new_values, minibatch['returns'])
+        v_pred = new_values
+        v_target = minibatch['returns']
+        v_old = minibatch['values']
+
+        # 1 . Unclipped loss: MSE
+        value_loss_unclipped = (v_pred - v_target)**2
+
+        # 2. Clipped loss
+        v_clipped = v_old + (v_pred - v_old).clamp(-PPO_EPSILON, PPO_EPSILON)
+        value_loss_clipped = (v_clipped - v_target)**2
+
+        # 3. Maximum of the two losses
+        value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+
 
         yield policy_loss, value_loss, entropy.mean()
 
@@ -197,6 +210,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                 optimizer.zero_grad()
                 loss = policy_loss + value_loss - entropy_coef * entropy
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5) # gradient clipping for stability
                 optimizer.step()
 
                 epoch_policy_loss += (policy_loss.item() - epoch_policy_loss) / (epoch + 1)
@@ -213,29 +227,17 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             final_x0s = tensorboard_image_process(final_x0s)
             logger.add_image('Diffusion Samples', final_x0s, epoch)
             
-            logger.add_scalar('Episode Stats / Terminal Rewards', debug_dict['terminal_rewards'].mean().item(), epoch) # Log the average terminal reward across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Terminal Rewards Std', debug_dict['terminal_rewards'].std().item(), epoch) # Log the std of terminal rewards across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Terminal Rewards Max', debug_dict['terminal_rewards'].max().item(), epoch) # Log the max terminal reward across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Terminal Rewards Min', debug_dict['terminal_rewards'].min().item(), epoch) # Log the min terminal reward across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Terminal Rewards Median', debug_dict['terminal_rewards'].median().item(), epoch) # Log the median terminal reward across the batch at the end of the episode
-
-            logger.add_scalar('Episode Stats / Episode Lengths', debug_dict['episode_lengths'].mean().item(), epoch) # Log the average episode length across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Episode Lengths Std', debug_dict['episode_lengths'].std().item(), epoch) # Log the std of episode lengths across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Episode Lengths Max', debug_dict['episode_lengths'].max().item(), epoch) # Log the max episode length across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Episode Lengths Min', debug_dict['episode_lengths'].min().item(), epoch) # Log the min episode length across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Episode Lengths Median', debug_dict['episode_lengths'].median().item(), epoch) # Log the median episode length across the batch at the end of the episode
-
-            
-            logger.add_scalar('Episode Stats / Final Alphas', debug_dict['final_alphas'].mean().item(), epoch) # Log the average final alpha across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Final Alphas Std', debug_dict['final_alphas'].std().item(), epoch) # Log the std of final alphas across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Final Alphas Max', debug_dict['final_alphas'].max().item(), epoch) # Log the max final alpha across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Final Alphas Min', debug_dict['final_alphas'].min().item(), epoch) # Log the min final alpha across the batch at the end of the episode
-            logger.add_scalar('Episode Stats / Final Alphas Median', debug_dict['final_alphas'].median().item(), epoch) # Log the median final alpha across the batch at the end of the episode 
-
-
-
-            # debug statistics about policy outputs
-            # debug_dict = {}
+            for key, value in debug_dict.items():
+                if value is None:
+                    continue
+                if len(value.shape) == 1:  # per-episode stats
+                    logger.add_scalar(f'Episode Stats / {key}', value.mean().item(), epoch)
+                else:
+                    logger.add_scalar(f'Episode Stats / {key}_mean', value.mean().item(), epoch)
+                    logger.add_scalar(f'Episode Stats / {key}_std', value.std().item(), epoch)
+                    logger.add_scalar(f'Episode Stats / {key}_max', value.max().item(), epoch)
+                    logger.add_scalar(f'Episode Stats / {key}_min', value.min().item(), epoch)
+                    logger.add_scalar(f'Episode Stats / {key}_median', value.median().item(), epoch)
             
             for key, value in rollout_buffer.items():
                 logger.add_scalar(f'Rollout/{key}_mean', value.mean().item(), epoch)
