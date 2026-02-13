@@ -52,9 +52,9 @@ class AutoEncoder(nn.Module):
             in_channels = latent_channels[i]
             self.decoder_layers.insert(0, 
                 nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='nearest'),
-                    nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
-                    nn.SiLU() if i != 0 else nn.Identity() # No activation on last layer (layers are inserted in reverse order so i==0 is last layer)
+                    nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, stride=1, padding=1),
+                    nn.PixelShuffle(upscale_factor=2),
+                    nn.SiLU()
                 )
             )
         
@@ -68,8 +68,6 @@ class AutoEncoder(nn.Module):
             x = layer(x)
         x = self.flatten(x)
         x = self.projection_layer(x)
-        x = F.tanh(x) # Bound the latent space to [-1, 1]
-
         return x
     
     def decode(self, x):
@@ -99,5 +97,6 @@ if  __name__ == "__main__":
     print(ae)
 
     encoded = ae.encode(input)
+    print(encoded.shape)
     decoded = ae.decode(encoded)
-
+    print(decoded.shape)

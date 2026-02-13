@@ -23,7 +23,7 @@ def CIFAR_dataloader(dataset_path, batch_size, num_workers=4, shuffle=True, drop
     ])
     dataset = CIFAR10(root=dataset_path, train=train, download=True, transform=transform)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, 
-                                             num_workers=num_workers, drop_last=drop_last)
+                                             num_workers=num_workers, drop_last=drop_last, pin_memory=True)
     
     denorm_fn = get_denorm_fn(mean, std)
     info_dict = {"H": 32, "W": 32, "C": 3}
@@ -38,7 +38,7 @@ def MNIST_dataloader(dataset_path, batch_size, num_workers=4, shuffle=True, drop
     ])
     dataset = MNIST(root=dataset_path, train=train, download=True, transform=transform)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, 
-                                             num_workers=num_workers, drop_last=drop_last)
+                                             num_workers=num_workers, drop_last=drop_last, pin_memory=True)
     
     denorm_fn = get_denorm_fn(mean, std)
     info_dict = {"H": 32, "W": 32, "C": 1}
@@ -52,7 +52,7 @@ def CelebAHQ_dataloader(dataset_path, batch_size, num_workers=4, shuffle=True, d
         transforms.Normalize(mean, std)
     ])
     dataset = CelebAHQ(root=dataset_path, transform=transform, return_labels=True)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers , drop_last=drop_last)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers , drop_last=drop_last, pin_memory=True)
     
     denorm_fn = get_denorm_fn(mean, std)
     info_dict = {"H":256, "W": 256, "C":3}

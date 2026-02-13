@@ -16,7 +16,7 @@ from src.rl.PPOAgent import PPOAgent
 
 
 GAMMA = 1.0
-GAE_LAMBDA = 1.0
+GAE_LAMBDA = 0.97
 PPO_EPSILON = 0.2
 
 @torch.no_grad()
@@ -35,6 +35,8 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     b_rewards = torch.zeros((T, B), device=env.device)
     b_dones = torch.zeros((T, B), device=env.device)
     b_values = torch.zeros((T, B), device=env.device)
+    b_action_means = torch.zeros((T, B), device=env.device) # for debugging and analysis purposes
+    b_action_log_stds = torch.zeros((T, B), device=env.device) # for debugging and analysis purposes
     final_x0s = None
     terminal_rewards = None
     final_alphas = None
@@ -45,7 +47,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     for t in range(T):
         # Here you would typically use your policy to get the action and log probability
         # For demonstration, we'll use random actions and dummy log probabilities
-        action, value, logprob = ppo_agent(obs['x0_encoded'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
+        action, value, logprob, action_mean, action_log_std = ppo_agent(obs['x0_encoded'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
         next_obs, rewards, dones = env.step(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
 
         # Store the transition in the rollout buffer
@@ -57,6 +59,8 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         b_rewards[t] = rewards
         b_dones[t] = dones
         b_values[t] = value
+        b_action_means[t] = action_mean.squeeze(-1) # Store action mean without the last dimension
+        b_action_log_stds[t] = action_log_std.squeeze(-1) # Store action log std without the last dimension
 
         obs = next_obs
         if dones.all():
@@ -66,7 +70,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
             final_alphas = obs['alpha']
             break
     
-    # Truncate the rollout tensors to the actual length of the episode
+    # Truncate tensors to actual episode length
     b_states = b_states[:last_t]
     b_alphas = b_alphas[:last_t]
     b_steps = b_steps[:last_t]
@@ -75,49 +79,51 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     b_rewards = b_rewards[:last_t]
     b_dones = b_dones[:last_t] 
     b_values = b_values[:last_t]
-   
-    shifted_dones = torch.cat([torch.zeros((1, B), device=b_dones.device), b_dones[:-1]], dim=0)
-    actual_finish_mask = b_dones.bool() & (~shifted_dones.bool())
-    active_mask = ~shifted_dones.bool()
+    b_action_means = b_action_means[:last_t]
+    b_action_log_stds = b_action_log_stds[:last_t]
 
-
-    b_advantages = torch.zeros_like(b_rewards)
-    last_gae_lambda = 0.0
-
-    for t in reversed(range(last_t)):
-        is_terminal = b_dones[t].float()
-        next_non_terminal = 1.0 - is_terminal
-        if t == last_t - 1:
-            next_values = 0.0
-        else:
-            next_values = b_values[t + 1]
-        
-        step_reward = b_rewards[t] * actual_finish_mask[t].float()
-        # delta = r + gamma * V(s') - V(s)
-        delta = step_reward + GAMMA * next_values * next_non_terminal - b_values[t]
-        # advantages[t] = delta + gamma * lambda * next_non_terminal * advantages[t + 1]
-        b_advantages[t] = last_gae_lambda = delta + GAMMA * GAE_LAMBDA * next_non_terminal * last_gae_lambda
+    active_mask = ~torch.cat([torch.zeros((1, B), device=b_dones.device, dtype=torch.bool), b_dones[:-1].bool()], dim=0)
     
-    b_advantages = b_advantages * active_mask.float()  # Zero out advantages for already done episodes
+    # Zero out rewards and values for dead transitions (post-terminal steps)
+    # The env returns terminal reward for dead steps, but we only want reward at the actual terminal step
+    b_rewards = b_rewards * active_mask.float()
+    b_values = b_values * active_mask.float()
+
+    
+    # Compute GAE advantages via reverse iteration (only over active transitions)
+    # Formula: A_t = δ_t + (γλ) * A_{t+1} * (1 - done_t)
+    # where δ_t = r_t + γ * V_{t+1} * (1 - done_t) - V_t
+    b_advantages = torch.zeros_like(b_rewards)
+    next_advantage = 0.0
+    next_value = 0.0
+    
+    for t in reversed(range(last_t)):
+        is_active = active_mask[t].float()
+        not_terminal = 1.0 - b_dones[t].float()
+        delta = b_rewards[t] + GAMMA * next_value * not_terminal - b_values[t]
+        b_advantages[t] = (delta + GAMMA * GAE_LAMBDA * not_terminal * next_advantage) * is_active
+        # Only propagate from active steps
+        next_advantage = torch.where(active_mask[t], b_advantages[t], next_advantage)
+        next_value = torch.where(active_mask[t], b_values[t], next_value)
+    
     b_returns = b_advantages + b_values
 
-    rollout = {
-        'states': b_states[active_mask], # Only include states from active steps
-        'alphas': b_alphas[active_mask],
-        'steps': b_steps[active_mask],
-        'actions': b_actions[active_mask],
-        'logprobs': b_logprobs[active_mask],
-        'advantages': b_advantages[active_mask],
-        'returns': b_returns[active_mask],
-        'dones': b_dones[active_mask],
-        'values': b_values[active_mask],
-    }
+    # Extract only active (non-post-terminal) transitions
+    rollout = {key: val[active_mask] for key, val in {
+        'states': b_states, 'alphas': b_alphas, 'steps': b_steps,
+        'actions': b_actions, 'logprobs': b_logprobs, 'advantages': b_advantages,
+        'returns': b_returns, 'dones': b_dones, 'values': b_values,
+        'action_means': b_action_means, 'action_log_stds': b_action_log_stds,
+    }.items()}
     
-    episode_lengths = 1 - b_dones.float() # 1 for active steps, 0 for done steps
-    episode_lengths = episode_lengths.sum(dim=0) # Sum over time dimension to get episode lengths for each episode in the batch
-    episode_lengths = episode_lengths + 1 # Add 1 to include the final step where the episode ended
+    # Episode length = number of steps taken (count active steps per trajectory)
+    episode_lengths = active_mask.float().sum(dim=0)
+    
 
-    debug_dict = {'final_x0s': final_x0s, 'terminal_rewards': terminal_rewards, 'episode_lengths': episode_lengths, 'final_alphas': final_alphas}
+    debug_dict = {'final_x0s': final_x0s, 
+                  'terminal_rewards': terminal_rewards, 
+                  'episode_lengths': episode_lengths, 
+                  'final_alphas': final_alphas}
 
     return rollout, debug_dict
 
@@ -144,7 +150,6 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
 
     # normalize advantages
     full_rollout['advantages'] = (full_rollout['advantages'] - full_rollout['advantages'].mean()) / (full_rollout['advantages'].std() + 1e-8)
-
     return full_rollout, debug_dict # return the final x0s from the last rollout for logging or analysis purposes after the PPO update
 
 def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
@@ -155,6 +160,8 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
             break
 
         minibatch = {key: full_rollout[key][i:i+minibatch_size] for key in full_rollout.keys()}
+
+        print("MINIBATCH ACTIONS", minibatch['actions'].shape)
 
         new_logprobs, new_values, entropy = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
         kl = new_logprobs - minibatch['logprobs']
@@ -253,7 +260,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train IADB')
 
     parser.add_argument('--dataset', type=str, default='CIFAR10', help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
-    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
+    parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
     parser.add_argument('--budget', type=int, default=100, help='Maximum number of steps per episode')
     # parser.add_argument('--base_dataset_path', type=str, default='/home/mila/d/daniel.bairamian/scratch/RLDiff_data/datasets/', help='Base path for datasets')
     # parser.add_argument('--base_logs_path', type=str, default='/home/mila/d/daniel.bairamian/scratch/RLDiff_data/logs/diffusion/IADB/', help='Base path for logs and checkpoints')
@@ -267,10 +274,10 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef', type=float, default=1e-3, help='Entropy coefficient for PPO')
+    parser.add_argument('--entropy_coef', type=float, default=1e-4, help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=1, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=10, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=16, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     args = parser.parse_args()
 

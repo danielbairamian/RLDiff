@@ -27,12 +27,17 @@ class DiffusionEnv:
 
         # if the agent is about to take the last step, and new alpha is < 1.0, we force it to take the last step to ensure the episode ends
         # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        # self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
+        # Freeze done episodes - don't update their state
+        self.x0 = torch.where(
+            self.dones.view(-1, 1, 1, 1), 
+            self.x0,  # Keep old x0 if done
+            self.x0 + d * (new_alpha - self.alpha).view(-1, 1, 1, 1)  # Update if active
+        )
 
-
-        self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
         
         # update alpha
-        self.alpha = new_alpha
+        self.alpha = torch.where(self.dones, self.alpha, new_alpha)
 
         # counter for episode termination per sample in the batch, only if it's not done
         self.steps = self.steps + (~self.dones).int()

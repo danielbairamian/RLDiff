@@ -12,7 +12,7 @@ LOG_MIN = -20
 LOG_MAX = 2
 
 class PPOAgent(nn.Module):
-    def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int], action_dim:int, act_min:float=0.0, act_max:float=1.0, log_std_init:float=-2.0):
+    def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int], action_dim:int, act_min:float=0.0, act_max:float=1.0, log_std_init:float=-2.0, mean_action_init:float=0.1):
         super(PPOAgent, self).__init__()
 
 
@@ -51,9 +51,24 @@ class PPOAgent(nn.Module):
         self.action_mean = nn.Linear(input_dim, action_dim)
         self.action_log_std = nn.Linear(input_dim, action_dim)
 
-        # # initialize log_std
-        # nn.init.normal_(self.action_log_std.weight, mean=0.0, std=0.01)
-        # nn.init.normal_(self.action_log_std.bias, mean=log_std_init, std=0.1)
+        # Initialize action mean to output small actions
+        with torch.no_grad():
+            # We want tanh(x) * 0.5 + 0.5 ≈ mean_action_init
+            # So tanh(x) ≈ (mean_action_init - 0.5) / 0.5
+            # So x ≈ atanh((mean_action_init - 0.5) / 0.5)
+            target_tanh = (mean_action_init - self.act_bias) / self.act_scale
+            target_tanh = torch.clamp(target_tanh, -0.99, 0.99)  # Keep in valid range
+            target_pretanh = torch.atanh(target_tanh)
+            
+            # Bias the output to this value
+            self.action_mean.bias.normal_(target_pretanh.item(), 0.01)  # Small noise around the target pre-tanh value
+            # Small weights so state dependency builds up gradually
+            self.action_mean.weight.normal_(0, 0.01)
+        
+        # # Initialize log_std to low exploration
+        # with torch.no_grad():
+        #     self.action_log_std.bias.normal_(log_std_init, 0.1)  # e.g., -2.0 → std ≈ 0.135
+        #     self.action_log_std.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(input_dim, 1)
     
@@ -131,11 +146,15 @@ class PPOAgent(nn.Module):
 
         action = torch.tanh(unsquashed_action) * self.act_scale + self.act_bias
 
-        return action, value.squeeze(-1), log_prob
+        return action, value.squeeze(-1), log_prob, action_mean, action_log_std
     
     def evaluate_actions(self, state, alpha, steps, actions):
         combined = self.backbone(state, alpha, steps)
         
+        if actions.dim() == 1:
+            actions = actions.unsqueeze(-1)  # Ensure actions have shape (B, action_dim)
+
+        print("COMBINED", combined.shape)
         action_mean = self.action_mean(combined)
         action_log_std = self.action_log_std(combined)
         action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX) # clamp log std for numerical stability
@@ -148,12 +167,16 @@ class PPOAgent(nn.Module):
         # Clamp to valid tanh range to avoid numerical issues
         normalized = torch.clamp(normalized, -1.0 + EPSILON, 1.0 - EPSILON)
         unsquashed_actions = torch.atanh(normalized)
+
+        print("UNSQUASHED ACTIONS", unsquashed_actions.shape)
         
         # Compute log probability in unsquashed space
         log_prob = probs.log_prob(unsquashed_actions).sum(dim=-1)
-        
+        print("LOG PROB BEFORE CORRECTION BEFORE SUM", probs.log_prob(unsquashed_actions).shape)
+        print("LOG PROB BEFORE CORRECTION", log_prob.shape)
         # Apply tanh squashing correction
         log_prob = log_prob - self._tanh_squash_correction(unsquashed_actions)
+        print("LOG PROB AFTER CORRECTION", log_prob.shape)
         
         # Entropy is computed in the unsquashed space
         # (the entropy of the base Gaussian distribution)
@@ -181,7 +204,7 @@ if __name__ == "__main__":
     alpha = torch.randn(batch_size).to(device)
     steps = torch.randn_like(alpha).to(device)
 
-    action, value, log_prob = agent(state, alpha, steps)
+    action, value, log_prob, action_mean, action_log_std = agent(state, alpha, steps)
     print("Action Shape: ", action.shape)
     print("Value Shape: ", value.shape) 
     print("Log Prob Shape: ", log_prob.shape)
