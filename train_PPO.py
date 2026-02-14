@@ -16,8 +16,8 @@ from src.rl.PPOAgent import PPOAgent
 
 
 GAMMA = 1.0
-GAE_LAMBDA = 1.0
-PPO_EPSILON = 0.2
+GAE_LAMBDA = 0.97
+PPO_EPSILON = 0.1
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -48,7 +48,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         # Here you would typically use your policy to get the action and log probability
         # For demonstration, we'll use random actions and dummy log probabilities
         action, value, logprob, action_mean, action_log_std = ppo_agent(obs['x0_encoded'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
-        next_obs, rewards, dones = env.step(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
+        next_obs, rewards, dones = env.step_optimized(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
 
         # Store the transition in the rollout buffer
         b_states[t] = obs['x0_encoded']

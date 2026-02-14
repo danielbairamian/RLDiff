@@ -101,7 +101,7 @@ class DiffusionEnv:
             lpips_dist = self.lpips_net(x0_lpips_fin, nearest_x1_lpips).view(-1)
 
             # Save the calculated reward into the cache
-            self.terminal_rewards_cache[just_done] = -lpips_dist
+            self.terminal_rewards_cache[just_done] = torch.exp(-lpips_dist)
             
         # Inject the calculated reward into the correct indices
         rewards = self.terminal_rewards_cache * self.dones.float()
@@ -179,7 +179,8 @@ class DiffusionEnv:
         lpips_dist = self.lpips_net(x0_lpips, nearest_x1_lpips).squeeze()  # shape: (B_x0,)        
         # lpips_reward = torch.exp(-min_lpips_dist)
         lpips_reward = -lpips_dist  # Using negative distance directly as reward, since LPIPS is already a perceptual similarity metric where lower is better
-        
+        lpips_reward = torch.exp(lpips_reward)
+
         rewards = lpips_reward * (self.dones).float()
 
         return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
