@@ -317,6 +317,7 @@ if __name__ == "__main__":
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=16, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
+    parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     args = parser.parse_args()
 
 
@@ -344,7 +345,7 @@ if __name__ == "__main__":
     iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
 
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
-    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
+    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, order=args.order, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
 
     ppo_agent = PPOAgent(state_dim=autoencoder.latent_dim, 
                          fused_dims=args.fused_dims, 

@@ -12,7 +12,7 @@ class DiffusionEnv:
         self.dataloader_iterator = iter(self.dataloader)
         self.denorm_fn = denorm_fn
         self.order = order
-        self.budget = budget
+        self.budget = budget // self.order  # Adjust budget based on the order of the method
         self.sample_multiplier = sample_multiplier # how many x0 samples to generate per x1 sample, to increase batch size for RL training
         
         # LPIPS perceptual loss network (lower = more similar)
@@ -26,8 +26,7 @@ class DiffusionEnv:
 
         action = action.clamp(0, 1)
         
-        # take a step in the environment using the IADB model
-        d = self.iadb_model(self.x0, self.alpha)['sample']
+        
         # update x0 and alpha based on the action taken
         new_alpha = self.alpha + action
         new_alpha = new_alpha.clamp(0, 1)
@@ -37,6 +36,21 @@ class DiffusionEnv:
         
         # self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
         # Freeze done episodes - don't update their state
+
+
+        if self.order == 1:
+            d = self.iadb_model(self.x0, self.alpha)['sample']
+        elif self.order == 2:
+            # Midpoint alpha for the second-order method
+            mid_alpha = (new_alpha + self.alpha) / 2
+            
+            # intermediate step (x_t+1/2)
+            d_1 = self.iadb_model(self.x0, self.alpha)['sample']
+            x_mid = self.x0 + d_1 * (mid_alpha - self.alpha).view(-1, 1, 1, 1)
+            # second step (x_t+1)
+            d = self.iadb_model(x_mid, mid_alpha)['sample']
+        
+
         self.x0 = torch.where(
             self.dones.view(-1, 1, 1, 1), 
             self.x0,  # Keep old x0 if done
@@ -60,11 +74,15 @@ class DiffusionEnv:
         x0_lpips = self.denorm_fn(self.x0) * 2 - 1  # [0,1] -> [-1,1]
         x1_lpips = self.denorm_fn(self.x1) * 2 - 1  # shape: (B_x1, C, H, W)
         
-        gen_mean = self.x0_encoded.mean(dim=0, keepdim=True)  # (1, latent_dim)
-        real_mean = self.x1_encoded.mean(dim=0, keepdim=True)  # (1, latent_dim)
+        gen_mean = self.x0_encoded.mean(dim=-1, keepdim=True)  # (B_x0, 1)
+        real_mean = self.x1_encoded.mean(dim=-1, keepdim=True)  # (B_x1, 1)
 
         z_gen_centered = self.x0_encoded - gen_mean  # (B_x0, latent_dim)
         z_real_centered = self.x1_encoded - real_mean  # (B_x1, latent_dim)
+
+        z_gen_centered = F.normalize(z_gen_centered, dim=-1)  # (B_x0, latent_dim)
+        z_real_centered = F.normalize(z_real_centered, dim=-1)  # (B_x1, latent_dim)
+
 
         correlation_matrix = torch.matmul(z_gen_centered, z_real_centered.T)  # (B_x0, B_x1)
         _, correlation_indices = correlation_matrix.max(dim=1)  # (B_x0,)   
