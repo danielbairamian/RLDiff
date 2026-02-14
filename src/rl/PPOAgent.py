@@ -28,7 +28,7 @@ class Backbone_Encoder(nn.Module):
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
         self.projection_encoder = nn.Sequential()
-        input_dim = fused_dims + time_encoder_dims[-1] + state_dim
+        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 # fused + time encoding + state + raw time inputs
         for i in range(len(projection_dims)):
             output_dim = projection_dims[i]
             self.projection_encoder.append(
@@ -89,7 +89,7 @@ class PPOAgent(nn.Module):
         self.mc_layer = MonteCarloLayer(self.critic, 
                                         dropout_p=0.1, mc_samples=256, 
                                         attention_mode='attention', attend_mode='inputs', 
-                                        num_heads=4, embedding_size=self.backbone.backbone_out_dim//4, 
+                                        num_heads=8, embedding_size=self.backbone.backbone_out_dim//2, 
                                         query_mode='per_sample')
 
     

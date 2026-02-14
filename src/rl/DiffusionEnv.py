@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import lpips
+import time
 
 class DiffusionEnv:
     def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10, sample_multiplier=16, denorm_fn=None):
@@ -19,6 +20,93 @@ class DiffusionEnv:
         self.lpips_net = lpips.LPIPS(net='vgg', verbose=False).to(device).eval()
         for param in self.lpips_net.parameters():
             param.requires_grad = False
+    
+    @torch.no_grad()
+    def step_optimized(self, action):
+        action = action.clamp(0, 1)
+        
+        new_alpha = self.alpha + action
+        new_alpha = new_alpha.clamp(0, 1)
+        # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        
+        # 1. IDENTIFY ACTIVE ENVIRONMENTS
+        # Only compute physics for episodes that haven't finished yet
+        active_mask = ~self.dones
+        
+        # --- OPTIMIZATION 1: MASKED DIFFUSION PHYSICS ---
+        d = torch.zeros_like(self.x0)
+        
+        if active_mask.any():
+            # Slice out only the active tensors
+            x0_act = self.x0[active_mask]
+            alpha_act = self.alpha[active_mask]
+            
+            if self.order == 1:
+                d[active_mask] = self.iadb_model(x0_act, alpha_act)['sample']
+            elif self.order == 2:
+                new_alpha_act = new_alpha[active_mask]
+                mid_alpha_act = (new_alpha_act + alpha_act) / 2
+                
+                d_1 = self.iadb_model(x0_act, alpha_act)['sample']
+                x_mid = x0_act + d_1 * (mid_alpha_act - alpha_act).view(-1, 1, 1, 1)
+                d[active_mask] = self.iadb_model(x_mid, mid_alpha_act)['sample']
+
+        # Apply physics to x0 (Inactive envs just safely add 0.0)
+        self.x0 = torch.where(
+            self.dones.view(-1, 1, 1, 1), 
+            self.x0,  
+            self.x0 + d * (new_alpha - self.alpha).view(-1, 1, 1, 1)  
+        )
+        
+        # Update trackers
+        self.alpha = torch.where(self.dones, self.alpha, new_alpha)
+        self.steps = self.steps + active_mask.int()
+        
+        # 2. IDENTIFY NEWLY DONE ENVIRONMENTS
+        # Find who crossed the finish line on THIS EXACT STEP
+        new_dones = self.dones | (self.alpha >= 1.0) | (self.steps >= self.budget)
+        just_done = new_dones & ~self.dones
+        self.dones = new_dones
+
+        # --- OPTIMIZATION 2: MASKED LATENT UPDATES ---
+        # The PPO agent needs the new state to make its next decision, 
+        # but we ONLY need to re-encode the environments that actually moved.
+        if active_mask.any():
+            self.x0_encoded[active_mask] = self.AE.encode(self.x0[active_mask])
+
+        # --- OPTIMIZATION 3: SPARSE TERMINAL REWARDS ---
+        # ONLY calculate LPIPS/Targeting if someone actually finished
+        if just_done.any():
+            # Extract ONLY the images and latents that just finished
+            x0_encoded_fin = self.x0_encoded[just_done]
+            x0_fin = self.x0[just_done]
+            
+            # Target Matching (Pearson Correlation) for the finished subset
+            gen_mean = x0_encoded_fin.mean(dim=-1, keepdim=True)
+            real_mean = self.x1_encoded.mean(dim=-1, keepdim=True)
+
+            z_gen_centered = F.normalize(x0_encoded_fin - gen_mean, dim=-1)
+            z_real_centered = F.normalize(self.x1_encoded - real_mean, dim=-1)
+
+            correlation_matrix = torch.matmul(z_gen_centered, z_real_centered.T) 
+            _, correlation_indices = correlation_matrix.max(dim=1) 
+            
+            # LPIPS Computation for the finished subset
+            x0_lpips_fin = self.denorm_fn(x0_fin) * 2 - 1
+            x1_lpips = self.denorm_fn(self.x1) * 2 - 1
+            nearest_x1_lpips = x1_lpips[correlation_indices]
+            
+            # .view(-1) is a critical safety catch here. 
+            # If exactly 1 agent finishes, .squeeze() would destroy the batch dimension.
+            lpips_dist = self.lpips_net(x0_lpips_fin, nearest_x1_lpips).view(-1)
+
+            # Save the calculated reward into the cache
+            self.terminal_rewards_cache[just_done] = -lpips_dist
+            
+        # Inject the calculated reward into the correct indices
+        rewards = self.terminal_rewards_cache * self.dones.float()
+
+        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
 
     @torch.no_grad()
     def step(self, action):
@@ -32,7 +120,7 @@ class DiffusionEnv:
         new_alpha = new_alpha.clamp(0, 1)
 
         # if the agent is about to take the last step, and new alpha is < 1.0, we force it to take the last step to ensure the episode ends
-        new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
         
         # self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
         # Freeze done episodes - don't update their state
@@ -117,33 +205,46 @@ class DiffusionEnv:
         self.alpha = torch.zeros(self.x0.shape[0], device=self.device) # Start at alpha=0 (x0)
         self.dones = torch.zeros(self.x0.shape[0], dtype=torch.bool, device=self.device)
         self.steps = torch.zeros(self.x0.shape[0], dtype=torch.int, device=self.device)
-        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
 
+        # Cache for terminal rewards so we can broadcast them on dead steps without recalculating
+        self.terminal_rewards_cache = torch.zeros(self.x0.shape[0], device=self.device)
+
+        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
 
 
 if __name__ == "__main__":
     # --- DUMMY CLASSES ---
+    # We must make these strictly deterministic based on inputs so we can compare the runs
     class DummyAE(nn.Module):
         def __init__(self, latent_dim=512):
             super().__init__()
             self.latent_dim = latent_dim
             
         def encode(self, x):
-            # Outputs a random latent vector of the correct shape [B, Latent_Dim]
-            return torch.ones(x.shape[0], self.latent_dim, device=x.device)
+            # Deterministic: Just flatten and slice/pad
+            flat = x.view(x.shape[0], -1)
+            if flat.shape[1] < self.latent_dim:
+                return F.pad(flat, (0, self.latent_dim - flat.shape[1]))
+            return flat[:, :self.latent_dim]
             
         def decode(self, z):
-            # Outputs a random image of the correct shape [B, 3, 32, 32]
             return torch.ones(z.shape[0], 3, 32, 32, device=z.device)
 
     class DummyIADB(nn.Module):
         def forward(self, x, alpha):
-            # The diffusion model predicts a direction 'd' of the same shape as the image
-            return {'sample': torch.randn_like(x)}
+            # Simulate a heavy U-Net forward pass (Batch size dictates compute time)
+            B = x.shape[0]
+            if B > 0:
+                # Do 10 heavy matrix multiplications
+                for _ in range(10):
+                    _ = torch.matmul(
+                        torch.randn(B, 1000, 1000, device=x.device), 
+                        torch.randn(B, 1000, 1000, device=x.device)
+                    )
+            return {'sample': x * 0.1}
 
     # --- DUMMY DATA ---
-    # Creates a simple list that acts as an iterator yielding (image_batch, labels)
-    batch_size = 32
+    batch_size = 128  # Increased batch size to highlight the speedup
     sample_mult = 4
     img_channels, img_size = 3, 32
     dummy_dataloader = [(torch.randn(batch_size, img_channels, img_size, img_size), None) for _ in range(10)]
@@ -155,49 +256,118 @@ if __name__ == "__main__":
     ae = DummyAE(latent_dim=512).to(device)
     iadb = DummyIADB().to(device)
     dummy_denorm_fn = lambda x: x.clamp(0, 1)  # Clamp to [0,1] for LPIPS compatibility
+    
     env = DiffusionEnv(
         dataloader=dummy_dataloader,
         iadb_model=iadb,
         AE=ae,
         device=device,
         order=1,
-        budget=10,
+        budget=20,
         sample_multiplier=sample_mult,
         denorm_fn=dummy_denorm_fn
     )
 
-    # --- RUN LOCAL TEST ---
-    print("--- Testing Reset ---")
-    obs = env.reset()
     expected_x0_batch = batch_size // sample_mult
-    
-    print(f"Real Image Batch (x1): {env.x1.shape}")
-    print(f"Generated Image Batch (x0): {obs['x0'].shape}")
-    print(f"Latent Shape (x0_encoded): {obs['x0_encoded'].shape}")
-    print(f"Alpha Initial: {obs['alpha']}\n")
+    MAX_STEPS = 25
 
-    assert obs['x0'].shape[0] == expected_x0_batch, "Sample multiplier slicing failed."
+    # 1. PRE-GENERATE STAGGERED ACTIONS
+    # We assign different step speeds to different elements in the batch.
+    # Some will reach 1.0 in 5 steps, others in 20. This triggers the dynamic masking optimization!
+    base_action_rates = torch.linspace(0.04, 0.25, expected_x0_batch, device=device)
+    action_sequence = [base_action_rates + torch.rand_like(base_action_rates) * 0.01 for _ in range(MAX_STEPS)]
 
-    print("--- Testing Step ---")
-    # Dummy action: Agent wants to take a step size of ~0.1
-    dummy_actions = torch.rand(expected_x0_batch, device=device) * 0.2 
+    print("--- Capturing Initial State ---")
+    env.reset()
+    init_state = {
+        'x1': env.x1.clone(),
+        'x1_encoded': env.x1_encoded.clone(),
+        'x0': env.x0.clone(),
+        'x0_encoded': env.x0_encoded.clone(),
+        'alpha': env.alpha.clone(),
+        'dones': env.dones.clone(),
+        'steps': env.steps.clone()
+    }
+
+    # --- RUN 1: STANDARD STEP ---
+    print("\n--- Running STANDARD step() ---")
+    standard_history = []
     
-    next_obs, rewards, dones = env.step(dummy_actions)
+    # Warmup LPIPS (PyTorch sometimes has overhead on the first execution)
+    _ = env.lpips_net(torch.randn(1, 3, 32, 32, device=device), torch.randn(1, 3, 32, 32, device=device))
     
-    print(f"Actions Taken: {dummy_actions}")
-    print(f"New Alphas: {next_obs['alpha']}")
-    print(f"Rewards: {rewards}")
-    print(f"Dones: {dones}\n")
-    
-    print("--- Testing Episode Loop (Fast-Forward to Done) ---")
-    # Force the environment to hit the budget
-    for _ in range(10):
-        next_obs, rewards, dones = env.step(dummy_actions)
-        if dones.all():
+    start_time = time.time()
+    for step_idx in range(MAX_STEPS):
+        if env.dones.all():
             break
+        obs, rewards, dones = env.step(action_sequence[step_idx])
+        
+        # Save exact copies of the outputs
+        standard_history.append({
+            'x0': obs['x0'].clone(),
+            'x0_encoded': obs['x0_encoded'].clone(),
+            'alpha': obs['alpha'].clone(),
+            'steps': obs['steps'].clone(),
+            'rewards': rewards.clone(),
+            'dones': dones.clone()
+        })
+    standard_time = time.time() - start_time
+    print(f"Standard loop finished in {len(standard_history)} steps.")
+
+
+    # --- RESTORE EXACT INITIAL STATE ---
+    env.x1 = init_state['x1'].clone()
+    env.x1_encoded = init_state['x1_encoded'].clone()
+    env.x0 = init_state['x0'].clone()
+    env.x0_encoded = init_state['x0_encoded'].clone()
+    env.alpha = init_state['alpha'].clone()
+    env.dones = init_state['dones'].clone()
+    env.steps = init_state['steps'].clone()
+
+
+    # --- RUN 2: OPTIMIZED STEP ---
+    print("\n--- Running OPTIMIZED step_optimized() ---")
+    opt_history = []
+    
+    start_time = time.time()
+    for step_idx in range(MAX_STEPS):
+        if env.dones.all():
+            break
+        obs, rewards, dones = env.step_optimized(action_sequence[step_idx])
+        
+        # Save exact copies of the outputs
+        opt_history.append({
+            'x0': obs['x0'].clone(),
+            'x0_encoded': obs['x0_encoded'].clone(),
+            'alpha': obs['alpha'].clone(),
+            'steps': obs['steps'].clone(),
+            'rewards': rewards.clone(),
+            'dones': dones.clone()
+        })
+    opt_time = time.time() - start_time
+    print(f"Optimized loop finished in {len(opt_history)} steps.")
+
+
+    # --- VERIFICATION ---
+    print("\n--- Verifying Outputs ---")
+    assert len(standard_history) == len(opt_history), "Episode lengths mismatch!"
+    
+    for step_idx, (std, opt) in enumerate(zip(standard_history, opt_history)):
+        try:
+            torch.testing.assert_close(std['x0'], opt['x0'], msg=f"x0 mismatch at step {step_idx}")
+            torch.testing.assert_close(std['x0_encoded'], opt['x0_encoded'], msg=f"x0_encoded mismatch at step {step_idx}")
+            torch.testing.assert_close(std['alpha'], opt['alpha'], msg=f"alpha mismatch at step {step_idx}")
+            torch.testing.assert_close(std['steps'], opt['steps'], msg=f"steps mismatch at step {step_idx}")
+            torch.testing.assert_close(std['rewards'], opt['rewards'], msg=f"rewards mismatch at step {step_idx}")
+            torch.testing.assert_close(std['dones'], opt['dones'], msg=f"dones mismatch at step {step_idx}")
+        except AssertionError as e:
+            print(f"❌ FAILED! {e}")
+            exit(1)
             
-    print(f"Final Alphas: {next_obs['alpha']}")
-    print(f"Final Rewards: {rewards}")
-    print(f"Final Steps: {next_obs['steps']}")
-    print("Test Complete. LPIPS reward working!")
-    print("Test Complete. No crashes!")
+    print("✅ SUCCESS! All outputs from step() and step_optimized() are exactly mathematically identical.")
+    
+    print(f"\n--- Performance Results (Batch Size: {expected_x0_batch}) ---")
+    print(f"Standard Time:  {standard_time:.4f}s")
+    print(f"Optimized Time: {opt_time:.4f}s")
+    speedup = (standard_time / opt_time) if opt_time > 0 else float('inf')
+    print(f"Speedup:        {speedup:.2f}x faster")
