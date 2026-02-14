@@ -50,7 +50,7 @@ class Backbone_Encoder(nn.Module):
    
         fused = self.fused_latent(state, time_inputs)
 
-        combined = torch.cat([fused, time_encoding, state], dim=-1)
+        combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
 
         for layer in self.projection_encoder:
             combined = layer(combined)
