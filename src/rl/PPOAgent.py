@@ -14,7 +14,6 @@ class Backbone_Encoder(nn.Module):
 
         self.time_encoder = nn.ModuleList()
         input_dim = 2 # alpha and steps
-        time_encoder_dims.append(state_dim) # Append state_dim to the end of time_encoder_dims for the bilinear layer input
         for i in range(len(time_encoder_dims)):
             output_dim = time_encoder_dims[i]
             self.time_encoder.append(

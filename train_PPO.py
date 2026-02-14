@@ -17,7 +17,7 @@ from src.rl.PPOAgent import PPOAgent
 
 GAMMA = 1.0
 GAE_LAMBDA = 0.97
-PPO_EPSILON = 0.1
+PPO_EPSILON = 0.2
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -319,12 +319,12 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
+    parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
     parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=1, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=16, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     args = parser.parse_args()
