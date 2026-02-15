@@ -27,7 +27,7 @@ class DiffusionEnv:
         
         new_alpha = self.alpha + action
         new_alpha = new_alpha.clamp(0, 1)
-        # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
         
         # 1. IDENTIFY ACTIVE ENVIRONMENTS
         # Only compute physics for episodes that haven't finished yet
@@ -101,7 +101,7 @@ class DiffusionEnv:
             lpips_dist = self.lpips_net(x0_lpips_fin, nearest_x1_lpips).view(-1)
 
             # Save the calculated reward into the cache
-            self.terminal_rewards_cache[just_done] = torch.exp(-lpips_dist)
+            self.terminal_rewards_cache[just_done] = -lpips_dist
             
         # Inject the calculated reward into the correct indices
         rewards = self.terminal_rewards_cache * self.dones.float()
@@ -120,7 +120,7 @@ class DiffusionEnv:
         new_alpha = new_alpha.clamp(0, 1)
 
         # if the agent is about to take the last step, and new alpha is < 1.0, we force it to take the last step to ensure the episode ends
-        # new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
+        new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
         
         # self.x0 = self.x0 + d*(new_alpha - self.alpha).view(-1, 1, 1, 1)
         # Freeze done episodes - don't update their state
@@ -179,7 +179,6 @@ class DiffusionEnv:
         lpips_dist = self.lpips_net(x0_lpips, nearest_x1_lpips).squeeze()  # shape: (B_x0,)        
         # lpips_reward = torch.exp(-min_lpips_dist)
         lpips_reward = -lpips_dist  # Using negative distance directly as reward, since LPIPS is already a perceptual similarity metric where lower is better
-        lpips_reward = torch.exp(lpips_reward)
 
         rewards = lpips_reward * (self.dones).float()
 

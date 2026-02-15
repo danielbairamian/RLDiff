@@ -87,11 +87,11 @@ class PPOAgent(nn.Module):
             self.action_mean.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(self.backbone.backbone_out_dim, 1)
-        self.mc_layer = MonteCarloLayer(self.critic, 
-                                        dropout_p=0.05, mc_samples=128, 
-                                        attention_mode='attention', attend_mode='inputs', 
-                                        num_heads=8, embedding_size=self.backbone.backbone_out_dim//2, 
-                                        query_mode='per_sample')
+        # self.mc_layer = MonteCarloLayer(self.critic, 
+        #                                 dropout_p=0.05, mc_samples=128, 
+        #                                 attention_mode='attention', attend_mode='inputs', 
+        #                                 num_heads=8, embedding_size=self.backbone.backbone_out_dim//2, 
+        #                                 query_mode='per_sample')
 
     
     def forward(self, state, alpha, steps, deterministic=False):
@@ -105,7 +105,7 @@ class PPOAgent(nn.Module):
         action_log_std = self.action_log_std.expand_as(action_mean)
         
         probs = Normal(action_mean, torch.exp(action_log_std))
-        value = self.mc_layer.get_mean_only(combined)
+        value = self.critic(combined)
         
         if deterministic:
             action = action_mean
@@ -129,7 +129,7 @@ class PPOAgent(nn.Module):
         action_log_std = self.action_log_std.expand_as(action_mean)
         
         probs = Normal(action_mean, torch.exp(action_log_std))
-        value = self.mc_layer.get_mean_only(combined)
+        value = self.critic(combined)
 
         # Standard Gaussian evaluation against the RAW unclipped actions
         log_prob = probs.log_prob(actions).sum(dim=-1)

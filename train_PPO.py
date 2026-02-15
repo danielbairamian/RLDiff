@@ -17,7 +17,7 @@ from src.rl.PPOAgent import PPOAgent
 
 GAMMA = 1.0
 GAE_LAMBDA = 0.97
-PPO_EPSILON = 0.2
+PPO_EPSILON = 0.1
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -202,7 +202,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
     std_params = [ppo_agent.action_log_std]
     base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
 
-    std_boost_farcor = 10.0
+    std_boost_farcor = 1.0
 
     optimizer = torch.optim.AdamW([
         {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
@@ -325,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
-    parser.add_argument('--sample_multiplier', type=int, default=16, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
+    parser.add_argument('--sample_multiplier', type=int, default=32, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     args = parser.parse_args()
 
