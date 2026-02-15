@@ -48,7 +48,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         # Here you would typically use your policy to get the action and log probability
         # For demonstration, we'll use random actions and dummy log probabilities
         action, value, logprob, action_mean, action_log_std = ppo_agent(obs['x0_encoded'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
-        next_obs, rewards, dones = env.step_optimized(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
+        next_obs, rewards, dones = env.step(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
 
         # Store the transition in the rollout buffer
         b_states[t] = obs['x0_encoded']
@@ -202,7 +202,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
     std_params = [ppo_agent.action_log_std]
     base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
 
-    std_boost_farcor = 1.0
+    std_boost_farcor = 10.0
 
     optimizer = torch.optim.AdamW([
         {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
