@@ -202,7 +202,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
     std_params = [ppo_agent.action_log_std]
     base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
 
-    std_boost_farcor = 1.0
+    std_boost_farcor = 10.0
 
     optimizer = torch.optim.AdamW([
         {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
