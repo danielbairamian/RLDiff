@@ -210,7 +210,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
     ])
     logger = SummaryWriter(logs_path)
 
-    for epoch in tqdm(range(num_epochs)):
+    for epoch in tqdm(range(num_epochs+1)):
         epoch_policy_loss = 0.0
         epoch_value_loss = 0.0
         epoch_entropy = 0.0
@@ -240,7 +240,9 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                 epoch_total_loss += (loss.item() - epoch_total_loss) / update_count
                 epoch_oob_loss += (out_of_bound_loss.item() - epoch_oob_loss) / update_count
 
-        test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
+        test_rollout, debug_dict_test = None, None
+        if epoch % 20 == 0: # Generate a test rollout every 20 epochs to monitor progress
+            test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
 
         if logs_path is not None:
             logger.add_scalar('Loss/Policy', epoch_policy_loss, epoch)
@@ -248,13 +250,16 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             logger.add_scalar('Loss/Entropy', epoch_entropy, epoch)
             logger.add_scalar('Loss/Total', epoch_total_loss, epoch)
             logger.add_scalar('Loss/OutOfBound', epoch_oob_loss, epoch)
-            final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
-            final_x0s = tensorboard_image_process(final_x0s)
-            logger.add_image('Diffusion Samples', final_x0s, epoch)
+            
+            if epoch % 20 == 0: # Log rollout image every 20 epochs to avoid excessive logging
+                final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
+                final_x0s = tensorboard_image_process(final_x0s)
+                logger.add_image('Diffusion Samples', final_x0s, epoch)
 
-            final_x0s_test = denorm_fn(debug_dict_test['final_x0s']) if denorm_fn is not None else debug_dict_test['final_x0s']
-            final_x0s_test = tensorboard_image_process(final_x0s_test)
-            logger.add_image('Diffusion Samples Test', final_x0s_test, epoch)
+            if test_rollout is not None:
+                final_x0s_test = denorm_fn(debug_dict_test['final_x0s']) if denorm_fn is not None else debug_dict_test['final_x0s']
+                final_x0s_test = tensorboard_image_process(final_x0s_test)
+                logger.add_image('Diffusion Samples Test', final_x0s_test, epoch)
             
             for key, value in debug_dict.items():
                 if value is None:
@@ -266,15 +271,16 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                     logger.add_scalar(f'Episode Stats / {key}_min', value.min().item(), epoch)
                     logger.add_scalar(f'Episode Stats / {key}_median', value.median().item(), epoch)
             
-            for key, value in debug_dict_test.items():
-                if value is None:
-                    continue
-                else:
-                    logger.add_scalar(f'Test Episode Stats / {key}_mean', value.mean().item(), epoch)
-                    logger.add_scalar(f'Test Episode Stats / {key}_std', value.std().item(), epoch)
-                    logger.add_scalar(f'Test Episode Stats / {key}_max', value.max().item(), epoch)
-                    logger.add_scalar(f'Test Episode Stats / {key}_min', value.min().item(), epoch)
-                    logger.add_scalar(f'Test Episode Stats / {key}_median', value.median().item(), epoch)
+            if test_rollout is not None:
+                for key, value in debug_dict_test.items():
+                    if value is None:
+                        continue
+                    else:
+                        logger.add_scalar(f'Test Episode Stats / {key}_mean', value.mean().item(), epoch)
+                        logger.add_scalar(f'Test Episode Stats / {key}_std', value.std().item(), epoch)
+                        logger.add_scalar(f'Test Episode Stats / {key}_max', value.max().item(), epoch)
+                        logger.add_scalar(f'Test Episode Stats / {key}_min', value.min().item(), epoch)
+                        logger.add_scalar(f'Test Episode Stats / {key}_median', value.median().item(), epoch)
             
             for key, value in rollout_buffer.items():
                 logger.add_scalar(f'Rollout/{key}_mean', value.mean().item(), epoch)
@@ -283,12 +289,13 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                 logger.add_scalar(f'Rollout/{key}_max', value.max().item(), epoch)
                 logger.add_scalar(f'Rollout/{key}_median', value.median().item(), epoch)
             
-            for key, value in test_rollout.items():
-                logger.add_scalar(f'Test Rollout/{key}_mean', value.mean().item(), epoch)
-                logger.add_scalar(f'Test Rollout/{key}_std', value.std().item(), epoch)
-                logger.add_scalar(f'Test Rollout/{key}_min', value.min().item(), epoch)
-                logger.add_scalar(f'Test Rollout/{key}_max', value.max().item(), epoch)
-                logger.add_scalar(f'Test Rollout/{key}_median', value.median().item(), epoch)
+            if test_rollout is not None:
+                for key, value in test_rollout.items():
+                    logger.add_scalar(f'Test Rollout/{key}_mean', value.mean().item(), epoch)
+                    logger.add_scalar(f'Test Rollout/{key}_std', value.std().item(), epoch)
+                    logger.add_scalar(f'Test Rollout/{key}_min', value.min().item(), epoch)
+                    logger.add_scalar(f'Test Rollout/{key}_max', value.max().item(), epoch)
+                    logger.add_scalar(f'Test Rollout/{key}_median', value.median().item(), epoch)
 
 
 
@@ -300,7 +307,7 @@ if __name__ == "__main__":
 
     # device
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu' if torch.backends.mps.is_available() else 'cpu')
     print(f'Using device: {device}')
 
     parser = argparse.ArgumentParser(description='Train IADB')
@@ -325,7 +332,7 @@ if __name__ == "__main__":
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
-    parser.add_argument('--sample_multiplier', type=int, default=32, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
+    parser.add_argument('--sample_multiplier', type=int, default=4, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     args = parser.parse_args()
 
@@ -354,9 +361,10 @@ if __name__ == "__main__":
     iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
 
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
-    env = DiffusionEnv(dataloader, iadb_model, autoencoder, device, order=args.order, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
-
-    ppo_agent = PPOAgent(state_dim=autoencoder.latent_dim, 
+    env = DiffusionEnv(dataloader=dataloader, AE=autoencoder, iadb_model=iadb_model, device=device, order=args.order, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
+    env.reset() # Call reset once to initialize the environment and verify that the dimensions are correct before starting PPO training
+    print("ENCODED SHAPE: ", env.x0_encoded.shape)
+    ppo_agent = PPOAgent(state_dim=env.x0_encoded.shape[-1], 
                          fused_dims=args.fused_dims, 
                          time_encoder_dims=args.time_encoder_dims, 
                          projection_dims=args.projection_dims, 
