@@ -300,6 +300,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
 
         if save_path is not None:
             torch.save(ppo_agent.state_dict(), os.path.join(save_path, 'ppo_agent.pth'))
+            torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.pth'))
 
 
 if __name__ == "__main__":
@@ -319,7 +320,6 @@ if __name__ == "__main__":
     parser.add_argument('--base_dataset_path', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/', help='Base path for datasets')
     parser.add_argument('--base_logs_path', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/IADB/', help='Base path for logs and checkpoints')
     parser.add_argument('--base_path_diffusion', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/IADB/', help='Base path for logs and checkpoints')
-    parser.add_argument('--base_AE', type=str, default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/AE/', help='Base path for logs and checkpoints')
     parser.add_argument('--fused_dims', type=int, default=64, help='Dimension of the fused state-time representation')
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
@@ -348,17 +348,15 @@ if __name__ == "__main__":
         raise ValueError("Unsupported dataset. Choose from: CIFAR10, MNIST, CelebAHQ")
     
     dataset_path = args.base_dataset_path + args.dataset
-    logs_path = args.base_logs_path + f"tensorboard/{args.dataset}/"
-    save_path = args.base_logs_path + f"checkpoints/{args.dataset}/"
-    logs_path_AE = args.base_logs_path + f"tensorboard/{args.dataset}/"
-    diffusion_path = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
-    ae_path = args.base_AE + f"checkpoints/{args.dataset}/"
+    ppo_exp_suffix = f"{args.dataset}_NFE_{args.budget}_order_{args.order}"
+    
+    logs_path = args.base_logs_path + f"tensorboard/{ppo_exp_suffix}/"
+    save_path = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}/"
 
+    diffusion_path = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
+    
     os.makedirs(save_path, exist_ok=True)
     os.makedirs(logs_path, exist_ok=True)
-
-
-    # autoencoder = torch.load(os.path.join(ae_path, f'ae.pth'), map_location=device).eval() # Load the entire AE class instance and set to eval mode
 
     iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
     

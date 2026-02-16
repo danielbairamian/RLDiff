@@ -34,6 +34,9 @@ class DiffusionEnv:
     def get_inception_features(self, x):
         """Helper to denorm, resize, and extract FID embeddings."""
         x_clean = self.denorm_fn(x) 
+        # make sure the image has 3 channels (InceptionV3 expects 3-channel input)
+        if x_clean.shape[1] == 1:
+            x_clean = x_clean.repeat(1, 3, 1, 1)
         x_preprocessed = self.inception_preprocess(x_clean)
         return self.inception(x_preprocessed)
 
