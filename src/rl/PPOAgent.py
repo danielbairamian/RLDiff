@@ -7,6 +7,7 @@ from torch.distributions import Normal
 import numpy as np  
 
 from src.MonteCarloLayer import MonteCarloLayer
+from src.latent_encoder.VisionEncoder import VisionEncoder
 
 class Backbone_Encoder(nn.Module):
     def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int]):
@@ -60,13 +61,14 @@ class Backbone_Encoder(nn.Module):
 
 
 class PPOAgent(nn.Module):
-    def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int], action_dim:int, act_min:float=0.0, act_max:float=1.0, std_init:float=0.3, mean_action_init:float=0.1):
+    def __init__(self, vision_encoder:VisionEncoder, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int], action_dim:int, act_min:float=0.0, act_max:float=1.0, std_init:float=0.3, mean_action_init:float=0.1):
         super(PPOAgent, self).__init__()
 
         # Keep these to reference in your env.step() clipping later
         self.register_buffer('act_min', torch.tensor(act_min, dtype=torch.float32))
         self.register_buffer('act_max', torch.tensor(act_max, dtype=torch.float32))
 
+        self.vision_encoder = vision_encoder
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         
         # 1. State-Dependent Mean
@@ -87,14 +89,15 @@ class PPOAgent(nn.Module):
             self.action_mean.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(self.backbone.backbone_out_dim, 1)
-        # self.mc_layer = MonteCarloLayer(self.critic, 
-        #                                 dropout_p=0.05, mc_samples=128, 
-        #                                 attention_mode='attention', attend_mode='inputs', 
-        #                                 num_heads=8, embedding_size=self.backbone.backbone_out_dim//2, 
-        #                                 query_mode='per_sample')
+        self.mc_layer = MonteCarloLayer(self.critic, 
+                                        dropout_p=0.05, mc_samples=128, 
+                                        attention_mode='attention', attend_mode='inputs', 
+                                        num_heads=8, embedding_size=self.backbone.backbone_out_dim//2, 
+                                        query_mode='per_sample')
 
     
     def forward(self, state, alpha, steps, deterministic=False):
+        state = self.vision_encoder.encode(state)   
         combined = self.backbone(state, alpha, steps)
         
         # Mean comes from the network
@@ -105,7 +108,7 @@ class PPOAgent(nn.Module):
         action_log_std = self.action_log_std.expand_as(action_mean)
         
         probs = Normal(action_mean, torch.exp(action_log_std))
-        value = self.critic(combined)
+        value = self.mc_layer.get_mean_only(combined)
         
         if deterministic:
             action = action_mean
@@ -118,6 +121,7 @@ class PPOAgent(nn.Module):
         return action, value.squeeze(-1), log_prob, action_mean, action_log_std
     
     def evaluate_actions(self, state, alpha, steps, actions):
+        state = self.vision_encoder.encode(state)
         # Buffer shape safety check
         if actions.dim() == 1:
             actions = actions.unsqueeze(-1)
@@ -129,32 +133,10 @@ class PPOAgent(nn.Module):
         action_log_std = self.action_log_std.expand_as(action_mean)
         
         probs = Normal(action_mean, torch.exp(action_log_std))
-        value = self.critic(combined)
+        value = self.mc_layer.get_mean_only(combined)
 
         # Standard Gaussian evaluation against the RAW unclipped actions
         log_prob = probs.log_prob(actions).sum(dim=-1)
         entropy = probs.entropy().sum(dim=-1)
 
         return log_prob, value.squeeze(-1), entropy, action_mean, action_log_std
-
-if __name__ == "__main__":
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-    print(f'Using device: {device}')
-
-    state_dim = 512
-    fused_dims = 256
-    time_encoder_dims = [32, 64, 128]
-    action_dim = 1
-    projection_dims = [512, 256, 64]
-
-    agent = PPOAgent(state_dim, fused_dims, time_encoder_dims, projection_dims, action_dim).to(device)
-
-    batch_size = 32
-    state = torch.randn(batch_size, state_dim).to(device)
-    alpha = torch.randn(batch_size).to(device)
-    steps = torch.randn_like(alpha).to(device)
-
-    action, value, log_prob, action_mean, action_log_std = agent(state, alpha, steps)
-    print("Action Shape: ", action.shape)
-    print("Value Shape: ", value.shape) 
-    print("Log Prob Shape: ", log_prob.shape)

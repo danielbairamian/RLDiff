@@ -12,8 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from src.rl.DiffusionEnv import DiffusionEnv
-from src.rl.PPOAgent import PPOAgent
-
+from src.rl.PPOAgent import PPOAgent, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 0.97
@@ -27,7 +26,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     B = env.x0.shape[0]
 
     # pre-allocate tensors for the rollout
-    b_states = torch.zeros((T, B, obs['x0_encoded'].shape[1]), device=env.device)
+    b_states = torch.zeros((T, B, *obs['x0'].shape[1:]), device=env.device)
     b_alphas = torch.zeros((T, B), device=env.device)
     b_steps = torch.zeros((T, B), device=env.device)
     b_actions = torch.zeros((T, B, 1), device=env.device)
@@ -47,11 +46,11 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     for t in range(T):
         # Here you would typically use your policy to get the action and log probability
         # For demonstration, we'll use random actions and dummy log probabilities
-        action, value, logprob, action_mean, action_log_std = ppo_agent(obs['x0_encoded'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
+        action, value, logprob, action_mean, action_log_std = ppo_agent(obs['x0'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
         next_obs, rewards, dones = env.step(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
 
         # Store the transition in the rollout buffer
-        b_states[t] = obs['x0_encoded']
+        b_states[t] = obs['x0']
         b_alphas[t] = obs['alpha']
         b_steps[t] = obs['steps'] / env.budget  # Normalize steps to [0, 1]
         b_actions[t] = action  # Store action without the last dimension
@@ -331,9 +330,11 @@ if __name__ == "__main__":
     parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=2, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=4, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
+    parser.add_argument('--latent_dim', type=int, default=512, help='Dimensionality of the latent space of the image state representation')
+    parser.add_argument('--latent_channels', type=int, nargs='+', default=[32, 64, 128, 256], help='List of latent channels for the encoder')
     args = parser.parse_args()
 
 
@@ -357,14 +358,17 @@ if __name__ == "__main__":
     os.makedirs(logs_path, exist_ok=True)
 
 
-    autoencoder = torch.load(os.path.join(ae_path, f'ae.pth'), map_location=device).eval() # Load the entire AE class instance and set to eval mode
-    iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
+    # autoencoder = torch.load(os.path.join(ae_path, f'ae.pth'), map_location=device).eval() # Load the entire AE class instance and set to eval mode
 
+    iadb_model = torch.load(os.path.join(diffusion_path, f'iadb_model.pth'), map_location=device).eval() # Load the entire IADB model class instance and set to eval mode
+    
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
-    env = DiffusionEnv(dataloader=dataloader, AE=autoencoder, iadb_model=iadb_model, device=device, order=args.order, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
+    vision_encoder = VisionEncoder(input_W=info_dict['W'], input_H=info_dict['H'], input_channels=info_dict['C'], latent_channels=args.latent_channels, latent_dim=args.latent_dim)
+
+    env = DiffusionEnv(dataloader=dataloader, iadb_model=iadb_model, device=device, order=args.order, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
     env.reset() # Call reset once to initialize the environment and verify that the dimensions are correct before starting PPO training
-    print("ENCODED SHAPE: ", env.x0_encoded.shape)
-    ppo_agent = PPOAgent(state_dim=env.x0_encoded.shape[-1], 
+    ppo_agent = PPOAgent(vision_encoder=vision_encoder, 
+                         state_dim=args.latent_dim, 
                          fused_dims=args.fused_dims, 
                          time_encoder_dims=args.time_encoder_dims, 
                          projection_dims=args.projection_dims, 

@@ -5,12 +5,9 @@ import torchvision.transforms as T
 import torchvision.models as models
 
 class DiffusionEnv:
-    def __init__(self, dataloader, iadb_model, AE, device, order=1, budget=10, sample_multiplier=4, denorm_fn=None):
+    def __init__(self, dataloader, iadb_model, device, order=1, budget=10, sample_multiplier=4, denorm_fn=None):
         self.dataloader = dataloader
         self.iadb_model = iadb_model
-        
-        # --- 1. THE FAST STATE ENCODER ---
-        self.AE = AE 
         
         self.device = device
         self.dataloader_iterator = iter(self.dataloader)
@@ -68,9 +65,6 @@ class DiffusionEnv:
         self.alpha = torch.where(self.dones, self.alpha, new_alpha)
         self.steps = self.steps + (~self.dones).int()
         self.dones = self.dones | (self.alpha >= 1.0) | (self.steps >= self.budget)
-        
-        # --- 1. FAST STATE ENCODING ---
-        self.x0_encoded = self.AE.encode(self.x0)
 
         # --- 2. OPTIMIZED REWARD COMPUTATION ---
         # Who just crossed the finish line exactly on this step?
@@ -95,7 +89,7 @@ class DiffusionEnv:
         # but the final step will retain the correct values for TensorBoard logging.
         rewards = self.episode_rewards * self.dones.float()
             
-        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
+        return {'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
 
     @torch.no_grad()
     def reset(self):
@@ -116,7 +110,6 @@ class DiffusionEnv:
         self.x0 = torch.randn_like(self.x1).to(self.device)
         self.x0 = self.x0[:self.x1.shape[0]//self.sample_multiplier] 
         
-        self.x0_encoded = self.AE.encode(self.x0)
         
         self.alpha = torch.zeros(self.x0.shape[0], device=self.device) 
         self.dones = torch.zeros(self.x0.shape[0], dtype=torch.bool, device=self.device)
@@ -125,4 +118,4 @@ class DiffusionEnv:
         # Persistent reward cache
         self.episode_rewards = torch.zeros(self.x0.shape[0], device=self.device)
 
-        return {'x0_encoded': self.x0_encoded, 'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
+        return {'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}
