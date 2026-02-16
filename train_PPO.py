@@ -209,7 +209,20 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
     ])
     logger = SummaryWriter(logs_path)
 
-    for epoch in tqdm(range(num_epochs+1)):
+    start_epoch = 0
+    checkpoint_file = os.path.join(save_path, 'ppo_checkpoint.pth')
+    if os.path.exists(checkpoint_file):
+        print(f"Resuming from checkpoint: {checkpoint_file}")
+        try:
+            checkpoint = torch.load(checkpoint_file, map_location=device)
+            ppo_agent.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+            print(f"Successfully resumed at epoch {start_epoch}")
+        except Exception as e:
+            print(f"Error loading checkpoint: {e}. Starting from scratch.")
+
+    for epoch in tqdm(range(start_epoch, num_epochs+1)):
         epoch_policy_loss = 0.0
         epoch_value_loss = 0.0
         epoch_entropy = 0.0
@@ -297,10 +310,27 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                     logger.add_scalar(f'Test Rollout/{key}_median', value.median().item(), epoch)
 
 
-
         if save_path is not None:
-            torch.save(ppo_agent.state_dict(), os.path.join(save_path, 'ppo_agent.pth'))
-            torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.pth'))
+            checkpoint_file = os.path.join(save_path, 'ppo_checkpoint.pth')
+            temp_checkpoint = checkpoint_file + ".tmp"
+            
+            try:
+                checkpoint_data = {
+                    'epoch': epoch,
+                    'model_state_dict': ppo_agent.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }
+                # 1. Save to a temporary file first
+                torch.save(checkpoint_data, temp_checkpoint)
+                
+                # 2. Use an atomic rename to replace the old checkpoint
+                # This way, ppo_checkpoint.pth is always a complete, valid file
+                os.replace(temp_checkpoint, checkpoint_file)
+                
+            except Exception as e:
+                print(f"Warning: Failed to save checkpoint at epoch {epoch}: {e}")
+                if os.path.exists(temp_checkpoint):
+                    os.remove(temp_checkpoint)
 
 
 if __name__ == "__main__":
@@ -330,7 +360,7 @@ if __name__ == "__main__":
     parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=2, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=8, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=4, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     parser.add_argument('--latent_dim', type=int, default=512, help='Dimensionality of the latent space of the image state representation')
