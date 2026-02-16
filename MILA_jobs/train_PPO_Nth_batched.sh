@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Define the grids for the loops
-DATASETS=("CIFAR10" "MNIST" "CelebAHQ")
-ORDERS=(1 2)
+DATASETS=("CIFAR10" "MNIST")
 BUDGETS=(10 20 30 50 100)
 
 for DS in "${DATASETS[@]}"; do
@@ -70,12 +69,12 @@ module --quiet load anaconda/3
 conda activate RLDiff 
 
 # Launch job with dataset-specific parameters
-python /home/mila/d/daniel.bairamian/RLDiff/train_PPO.py \\
+python /home/mila/d/daniel.bairamian/RLDiff/train_PPO_nthorder.py \\
     --dataset "$DS" \\
     --batch_size $B_SIZE \\
     --sample_multiplier $S_MULT \\
     --budget "$BUD" \\
-    --order "$ORD" \\
+    --order 2 \\
     --target_steps $T_STEPS \\
     --minibatch_size $MB_SIZE \\
     --num_epochs $N_EPOCHS \\

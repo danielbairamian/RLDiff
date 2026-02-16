@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from src.rl.DiffusionEnvNthOrder import DiffusionEnvNthOrder
-from src.rl.PPOAgent import PPOAgent, VisionEncoder
+from src.rl.PPOAgentNthOrder import PPOAgenNthOrder, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 0.97
@@ -407,9 +407,9 @@ if __name__ == "__main__":
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
     vision_encoder = VisionEncoder(input_W=info_dict['W'], input_H=info_dict['H'], input_channels=info_dict['C'], latent_channels=args.latent_channels, latent_dim=args.latent_dim)
 
-    env = DiffusionEnvNthOrder(dataloader=dataloader, iadb_model=iadb_model, device=device, budget=args.budget, order=2, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
+    env = DiffusionEnvNthOrder(dataloader=dataloader, iadb_model=iadb_model, device=device, budget=args.budget, order=args.order, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
     env.reset() # Call reset once to initialize the environment and verify that the dimensions are correct before starting PPO training
-    ppo_agent = PPOAgent(vision_encoder=vision_encoder, 
+    ppo_agent = PPOAgenNthOrder(vision_encoder=vision_encoder, 
                          state_dim=args.latent_dim, 
                          fused_dims=args.fused_dims, 
                          time_encoder_dims=args.time_encoder_dims, 
