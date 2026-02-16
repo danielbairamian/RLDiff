@@ -90,7 +90,7 @@ class PPOAgent(nn.Module):
 
         self.critic = nn.Linear(self.backbone.backbone_out_dim, 1)
         self.mc_layer = MonteCarloLayer(self.critic, 
-                                        dropout_p=0.05, mc_samples=128, 
+                                        dropout_p=0.05, mc_samples=256, 
                                         attention_mode='attention', attend_mode='inputs', 
                                         num_heads=8, embedding_size=self.backbone.backbone_out_dim//2, 
                                         query_mode='per_sample')

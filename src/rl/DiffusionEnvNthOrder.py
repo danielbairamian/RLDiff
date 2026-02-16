@@ -31,7 +31,7 @@ def get_dummy_dataloader(batch_size=8, img_size=64, num_batches=5):
 # 2. DIFFUSION ENVIRONMENT
 # ==========================================
 class DiffusionEnvNthOrder:
-    def __init__(self, dataloader, iadb_model, device, budget=10, sample_multiplier=2, denorm_fn=None):
+    def __init__(self, dataloader, iadb_model, device, budget=10, order=-1, sample_multiplier=2, denorm_fn=None):
         self.dataloader = dataloader
         self.iadb_model = iadb_model
         
@@ -40,6 +40,7 @@ class DiffusionEnvNthOrder:
         self.denorm_fn = denorm_fn if denorm_fn else lambda x: x # Default to identity
         self.budget = budget 
         self.sample_multiplier = sample_multiplier 
+        self.max_order =  self.budget if order == -1 else order # <-- too costly to allow full budget in one step, so we will cap at a reasonable max order (e.g., 5)
         
         # --- THE GOLD-STANDARD REWARD (InceptionV3) ---
         print("Loading InceptionV3 (Official FID Feature Space)...")
@@ -74,8 +75,8 @@ class DiffusionEnvNthOrder:
         old_dones = self.dones.clone()
         active_mask = ~self.dones
         
-        # 2. Map continuous order to [1, self.budget]
-        requested_order = torch.round(order_action * (self.budget - 1)) + 1
+        # 2. Map continuous order to [1, self.max_order]
+        requested_order = torch.round(order_action * (self.max_order - 1)) + 1
         requested_order = requested_order.int()
         
         # 3. Apply Constraints: Cap at remaining budget

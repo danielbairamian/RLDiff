@@ -376,6 +376,7 @@ if __name__ == "__main__":
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs', type=int, default=8, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=4, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
+    parser.add_argument('--order', type=int, default=-1, help='Max Order of the Env (-1 for full budget)')
     parser.add_argument('--latent_dim', type=int, default=512, help='Dimensionality of the latent space of the image state representation')
     parser.add_argument('--latent_channels', type=int, nargs='+', default=[32, 64, 128, 256], help='List of latent channels for the encoder')
     args = parser.parse_args()
@@ -406,7 +407,7 @@ if __name__ == "__main__":
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size*args.sample_multiplier) # Multiply batch size by sample multiplier to generate more samples for RL training
     vision_encoder = VisionEncoder(input_W=info_dict['W'], input_H=info_dict['H'], input_channels=info_dict['C'], latent_channels=args.latent_channels, latent_dim=args.latent_dim)
 
-    env = DiffusionEnvNthOrder(dataloader=dataloader, iadb_model=iadb_model, device=device, budget=args.budget, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
+    env = DiffusionEnvNthOrder(dataloader=dataloader, iadb_model=iadb_model, device=device, budget=args.budget, order=2, sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn) # Pass the denormalization function to the environment so it can log denormalized images to TensorBoard during training
     env.reset() # Call reset once to initialize the environment and verify that the dimensions are correct before starting PPO training
     ppo_agent = PPOAgent(vision_encoder=vision_encoder, 
                          state_dim=args.latent_dim, 
