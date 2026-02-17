@@ -11,8 +11,8 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from src.rl.DiffusionEnvNthOrder import DiffusionEnvNthOrder
-from src.rl.PPOAgentNthOrder import PPOAgenNthOrder, VisionEncoder
+from Nth_order_hold.DiffusionEnvNthOrder import DiffusionEnvNthOrder
+from Nth_order_hold.PPOAgentNthOrder import PPOAgenNthOrder, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 0.97
