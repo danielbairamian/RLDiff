@@ -15,7 +15,7 @@ from src.rl.DiffusionEnv import DiffusionEnv
 from src.rl.PPOAgent import PPOAgent, VisionEncoder
 
 GAMMA = 1.0
-GAE_LAMBDA = 0.97
+GAE_LAMBDA = 1.0
 PPO_EPSILON = 0.1
 
 @torch.no_grad()
