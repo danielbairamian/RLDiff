@@ -16,7 +16,8 @@ from src.rl.PPOAgent import PPOAgent, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
-PPO_EPSILON = 0.1
+PPO_EPSILON = 0.2
+STD_LR_BOOST_FARCTOR = 10 # Boost factor for log_std learning rate to encourage exploration early on, can be decayed later if needed
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -201,11 +202,9 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
     std_params = [ppo_agent.action_log_std]
     base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
 
-    std_boost_farcor = 1e2 # Boost factor for log_std learning rate to encourage exploration early on, can be decayed later if needed
-
     optimizer = torch.optim.AdamW([
         {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
-        {'params': std_params, 'lr': lr * std_boost_farcor, 'weight_decay': 0.0}  # Higher learning rate for log_std
+        {'params': std_params, 'lr': lr * STD_LR_BOOST_FARCTOR, 'weight_decay': 0.0}  # Higher learning rate for log_std
     ])
     logger = SummaryWriter(logs_path)
 
@@ -354,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=3e-5, help='Learning rate for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
     parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )

@@ -9,10 +9,43 @@ import numpy as np
 from src.MonteCarloLayer import MonteCarloLayer
 from src.latent_encoder.VisionEncoder import VisionEncoder
 
+
+class NeRFEmbedder(nn.Module):
+    """
+    NeRF-style sinusoidal positional encoding.
+    For each input scalar, produces [sin(2^0 * pi * x), cos(2^0 * pi * x), ..., sin(2^(L-1) * pi * x), cos(2^(L-1) * pi * x)]
+    Output dim per scalar: 2 * L
+    """
+    def __init__(self, L: int):
+        super().__init__()
+        self.L = L
+        # Precompute frequency bands: [2^0, 2^1, ..., 2^(L-1)]
+        freqs = 2.0 ** torch.arange(L, dtype=torch.float32)  # (L,)
+        self.register_buffer('freqs', freqs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (..., D) — any number of leading dims, D input scalars
+        returns: (..., D * 2 * L)
+        """
+        # x: (..., D) -> (..., D, 1) * (L,) -> (..., D, L)
+        x_freq = x.unsqueeze(-1) * self.freqs * torch.pi  # (..., D, L)
+        sins = torch.sin(x_freq)   # (..., D, L)
+        coss = torch.cos(x_freq)   # (..., D, L)
+        # interleave: (..., D, 2L) -> (..., D*2L)
+        embedded = torch.stack([sins, coss], dim=-1)       # (..., D, L, 2)
+        return embedded.flatten(start_dim=-3)              # (..., D * L * 2)
+
+    @property
+    def out_dim_per_scalar(self) -> int:
+        return 2 * self.L
+
 class Backbone_Encoder(nn.Module):
     def __init__(self, state_dim:int, fused_dims:int, time_encoder_dims:List[int], projection_dims:List[int]):
         super(Backbone_Encoder, self).__init__()
 
+        self.nerf_embedder = NeRFEmbedder(L=16)  # Example with L=4, can be tuned
+        nerf_out_dim = self.nerf_embedder.out_dim_per_scalar * 2  # alpha and steps
         self.time_encoder = nn.ModuleList()
         input_dim = 2 # alpha and steps
         for i in range(len(time_encoder_dims)):
@@ -30,7 +63,7 @@ class Backbone_Encoder(nn.Module):
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
         self.projection_encoder = nn.Sequential()
-        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 # fused + time encoding + state + raw time inputs
+        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2  + nerf_out_dim# fused + time encoding + state + raw time inputs
         for i in range(len(projection_dims)):
             output_dim = projection_dims[i]
             self.projection_encoder.append(
@@ -52,7 +85,8 @@ class Backbone_Encoder(nn.Module):
    
         fused = self.fused_latent(state, time_inputs)
 
-        combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
+        nerf_embedded = self.nerf_embedder(time_inputs)
+        combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embedded], dim=-1)
 
         for layer in self.projection_encoder:
             combined = layer(combined)

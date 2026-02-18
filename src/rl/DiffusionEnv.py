@@ -46,6 +46,7 @@ class DiffusionEnv:
         
         new_alpha = self.alpha + action
         new_alpha = new_alpha.clamp(0, 1)
+        # to force termination <-- vvv uncomment line below vvv -->
         new_alpha = torch.where(self.steps >= self.budget - 1, torch.ones_like(new_alpha), new_alpha)
         
         # Track who is already done before this step
@@ -91,6 +92,7 @@ class DiffusionEnv:
         # train.py's active_mask will automatically zero out duplicates for the math, 
         # but the final step will retain the correct values for TensorBoard logging.
         rewards = self.episode_rewards * self.dones.float()
+        # rewards = self.episode_rewards * ( self.alpha >= 1.0 ).float()  # Only give reward if they actually reached the end, not just ran out of steps
             
         return {'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
 

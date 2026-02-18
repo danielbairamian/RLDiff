@@ -44,7 +44,7 @@ for DS in "${DATASETS[@]}"; do
             TIME_ENC="32 64"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
-            LAT_CHAN="8 16 32 64 128"
+            LAT_CHAN="8 16 32 64 128 256"
             ;;
         
     esac
