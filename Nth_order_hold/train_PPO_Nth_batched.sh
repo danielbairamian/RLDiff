@@ -51,7 +51,7 @@ for DS in "${DATASETS[@]}"; do
     for ORD in "${ORDERS[@]}"; do
         for BUD in "${BUDGETS[@]}"; do
             
-            JOB_NAME="${DS}_O${ORD}_B${BUD}"
+            JOB_NAME="${DS}_Nth_order_O${ORD}_B${BUD}"
             
             sbatch <<EOF
 #!/bin/bash
