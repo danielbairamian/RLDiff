@@ -15,7 +15,7 @@ for DS in "${DATASETS[@]}"; do
             T_STEPS=4096
             F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 64"
+            TIME_ENC="32 64 256"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
             LAT_CHAN="16 32 64 128"
@@ -28,7 +28,7 @@ for DS in "${DATASETS[@]}"; do
             T_STEPS=4096
             F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 64"
+            TIME_ENC="32 64 256"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
             LAT_CHAN="16 32 64 128"
@@ -41,7 +41,7 @@ for DS in "${DATASETS[@]}"; do
             T_STEPS=2048
             F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 64"
+            TIME_ENC="32 64 256"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
             LAT_CHAN="8 16 32 64 128 256"

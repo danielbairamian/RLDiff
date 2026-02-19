@@ -9,8 +9,10 @@ import numpy as np
 from src.MonteCarloLayer import MonteCarloLayer
 from src.latent_encoder.VisionEncoder import VisionEncoder
 
+
 LOG_MIN = -10
 LOG_MAX = 2
+STATE_STD = False
 
 
 class NeRFEmbedder(nn.Module):
@@ -114,8 +116,11 @@ class PPOAgent(nn.Module):
         # 2. State-Independent Log Std (Global Parameter)
         # Shape: (1, action_dim). Initialized to log_std_init.
         log_std_init = np.log(std_init)
-         # self.action_log_std = nn.Parameter(torch.full((1, action_dim), log_std_init, dtype=torch.float32))
-        self.action_log_std = nn.Linear(self.backbone.backbone_out_dim, action_dim)
+
+        if not STATE_STD:
+            self.action_log_std = nn.Parameter(torch.full((1, action_dim), log_std_init, dtype=torch.float32))
+        else:
+            self.action_log_std = nn.Linear(self.backbone.backbone_out_dim, action_dim)
 
         # inverse sigmoid for init
         # sigmoid = 1 / (1 + e^-x) --> x = log(p / (1 - p))
@@ -126,8 +131,9 @@ class PPOAgent(nn.Module):
             self.action_mean.bias.normal_(mean_action_init, 0.01)
             self.action_mean.weight.normal_(0, 0.01)
 
-            self.action_log_std.bias.normal_(log_std_init, 0.01)
-            self.action_log_std.weight.normal_(0, 0.01)
+            if STATE_STD:
+                self.action_log_std.bias.normal_(log_std_init, 0.01)
+                self.action_log_std.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(self.backbone.backbone_out_dim, 1)
         self.mc_layer = MonteCarloLayer(self.critic, 
@@ -146,9 +152,11 @@ class PPOAgent(nn.Module):
         # action_mean = torch.sigmoid(action_mean) * (self.act_max - self.act_min) + self.act_min
 
         # Log std is expanded to match the batch size: [1, A] -> [B, A]
-        # action_log_std = self.action_log_std.expand_as(action_mean)
-        action_log_std = self.action_log_std(combined)
-        action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
+        if not STATE_STD:
+            action_log_std = self.action_log_std.expand_as(action_mean)
+        else:
+             action_log_std = self.action_log_std(combined)
+             action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
         
         probs = Normal(action_mean, torch.exp(action_log_std))
         value = self.mc_layer.get_mean_only(combined)
@@ -173,9 +181,11 @@ class PPOAgent(nn.Module):
 
         action_mean = self.action_mean(combined)
         # action_mean = torch.sigmoid(action_mean) * (self.act_max - self.act_min) + self.act_min
-        # action_log_std = self.action_log_std.expand_as(action_mean)
-        action_log_std = self.action_log_std(combined)
-        action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
+        if not STATE_STD:
+            action_log_std = self.action_log_std.expand_as(action_mean)
+        else:
+             action_log_std = self.action_log_std(combined)
+             action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
         
         probs = Normal(action_mean, torch.exp(action_log_std))
         value = self.mc_layer.get_mean_only(combined)

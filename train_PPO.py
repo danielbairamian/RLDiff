@@ -18,6 +18,7 @@ GAMMA = 1.0
 GAE_LAMBDA = 1.0
 PPO_EPSILON = 0.2
 STD_LR_BOOST_FARCTOR = 1 # Boost factor for log_std learning rate to encourage exploration early on, can be decayed later if needed
+STATE_STD = False
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -199,15 +200,17 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
 
     print(f"Training PPO for {num_epochs} epochs with target_steps={target_steps}, minibatch_size={minibatch_size}, num_ppo_epochs={num_ppo_epochs}, lr={lr}, weight_decay={weight_decay}, entropy_coef={entropy_coef}, oob_coef={oob_coef}")
 
-    # std_params = [ppo_agent.action_log_std]
-    # base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
+    if not STATE_STD:
+        std_params = [ppo_agent.action_log_std]
+        base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
 
-    # optimizer = torch.optim.AdamW([
-    #     {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
-    #     {'params': std_params, 'lr': lr * STD_LR_BOOST_FARCTOR, 'weight_decay': 0.0}  # Higher learning rate for log_std
-    # ])
-
-    optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.AdamW([
+            {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
+            {'params': std_params, 'lr': lr * STD_LR_BOOST_FARCTOR, 'weight_decay': 0.0}  # Higher learning rate for log_std
+        ])
+    
+    else:
+        optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
 
     logger = SummaryWriter(logs_path)
 
@@ -357,12 +360,12 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
+    parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
-    parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
+    parser.add_argument('--oob_coef', type=float, default=0.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=16, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=4, help='How many x1 samples to generate per x0 sample in the environment, to increase batch size for RL training')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     parser.add_argument('--latent_dim', type=int, default=512, help='Dimensionality of the latent space of the image state representation')
