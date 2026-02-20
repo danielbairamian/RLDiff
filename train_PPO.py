@@ -362,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
-    parser.add_argument('--oob_coef', type=float, default=0.0, help='Coefficient for out-of-bounds action penalty'  )
+    parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs', type=int, default=16, help='Number of PPO epochs to perform for each update')
