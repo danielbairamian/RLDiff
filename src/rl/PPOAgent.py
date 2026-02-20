@@ -12,7 +12,7 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 
 LOG_MIN = -10
 LOG_MAX = 2
-STATE_STD = False
+STATE_STD = True
 
 
 class NeRFEmbedder(nn.Module):
@@ -156,7 +156,7 @@ class PPOAgent(nn.Module):
             action_log_std = self.action_log_std.expand_as(action_mean)
         else:
              action_log_std = self.action_log_std(combined)
-             action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
+             # action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
         
         probs = Normal(action_mean, torch.exp(action_log_std))
         value = self.mc_layer.get_mean_only(combined)
@@ -185,7 +185,7 @@ class PPOAgent(nn.Module):
             action_log_std = self.action_log_std.expand_as(action_mean)
         else:
              action_log_std = self.action_log_std(combined)
-             action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
+             # action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
         
         probs = Normal(action_mean, torch.exp(action_log_std))
         value = self.mc_layer.get_mean_only(combined)

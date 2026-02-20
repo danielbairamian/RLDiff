@@ -37,7 +37,7 @@ for DS in "${DATASETS[@]}"; do
         "CelebAHQ")
             S_MULT=2
             B_SIZE=32
-            MB_SIZE=128
+            MB_SIZE=256
             T_STEPS=2048
             F_DIMS=64
             N_EPOCHS=2000
