@@ -129,7 +129,7 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
         for key in rollout_chunks[0].keys()
     }
 
-    full_rollout['advantages'] = (full_rollout['advantages'] - full_rollout['advantages'].mean()) / (full_rollout['advantages'].std() + 1e-8)
+    full_rollout['advantages'] = (full_rollout['advantages'] - full_rollout['advantages'].mean()) / (full_rollout['advantages'].std() + 1e-6)
     return full_rollout, debug_dict
 
 def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
@@ -157,17 +157,11 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
         value_loss_clipped = (v_clipped - v_target)**2
         value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
-        # Beta can't leave [0,1] so OOB loss is gone.
-        # Concentration penalty replaces std_penalty: soft ceiling to prevent
-        # the agent from collapsing to a deterministic policy prematurely.
-        concentration = conc_alpha + conc_beta
-        concentration_penalty = F.relu(concentration - 50.0).pow(2).mean()
+        yield policy_loss, value_loss, entropy.mean(), kl.mean()
 
-        yield policy_loss, value_loss, entropy.mean(), concentration_penalty
+def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, denorm_fn=None, logs_path=None, save_path=None):
 
-def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, concentration_penalty_coef=0.01, denorm_fn=None, logs_path=None, save_path=None):
-
-    print(f"Training PPO for {num_epochs} epochs with target_steps={target_steps}, minibatch_size={minibatch_size}, num_ppo_epochs={num_ppo_epochs}, lr={lr}, weight_decay={weight_decay}, entropy_coef={entropy_coef}, concentration_penalty_coef={concentration_penalty_coef}")
+    print(f"Training PPO for {num_epochs} epochs with target_steps={target_steps}, minibatch_size={minibatch_size}, num_ppo_epochs={num_ppo_epochs}, lr={lr}, weight_decay={weight_decay}, entropy_coef={entropy_coef}")
 
     optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -192,6 +186,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
         epoch_entropy = 0.0
         epoch_total_loss = 0.0
         epoch_concentration_penalty = 0.0
+        epoch_kl = 0.0
         update_count = 0
 
         rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
@@ -201,9 +196,9 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             for key in rollout_buffer.keys():
                 rollout_buffer[key] = rollout_buffer[key][perm]
 
-            for policy_loss, value_loss, entropy, concentration_penalty in ppo_update(ppo_agent, minibatch_size, full_rollout=rollout_buffer):
+            for policy_loss, value_loss, entropy, kl in ppo_update(ppo_agent, minibatch_size, full_rollout=rollout_buffer):
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss - entropy_coef * entropy + concentration_penalty_coef * concentration_penalty
+                loss = policy_loss + value_loss - entropy_coef * entropy
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5)
                 optimizer.step()
@@ -213,7 +208,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
                 epoch_value_loss += (value_loss.item() - epoch_value_loss) / update_count
                 epoch_entropy += (entropy.item() - epoch_entropy) / update_count
                 epoch_total_loss += (loss.item() - epoch_total_loss) / update_count
-                epoch_concentration_penalty += (concentration_penalty.item() - epoch_concentration_penalty) / update_count
+                epoch_kl += (kl.item() - epoch_kl) / update_count
 
         test_rollout, debug_dict_test = None, None
         if epoch % 20 == 0:
@@ -223,6 +218,7 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             logger.add_scalar('Loss/Policy', epoch_policy_loss, epoch)
             logger.add_scalar('Loss/Value', epoch_value_loss, epoch)
             logger.add_scalar('Loss/Entropy', epoch_entropy, epoch)
+            logger.add_scalar('Loss/KL', epoch_kl, epoch)
             logger.add_scalar('Loss/Total', epoch_total_loss, epoch)
             logger.add_scalar('Loss/ConcentrationPenalty', epoch_concentration_penalty, epoch)
             
@@ -308,13 +304,12 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=0.0, help='Entropy coefficient for PPO')
-    parser.add_argument('--concentration_penalty_coef', type=float, default=0.0, help='Coefficient for concentration penalty to prevent exploitation collapse')
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs', type=int, default=8, help='Number of PPO epochs to perform for each update')
+    parser.add_argument('--num_ppo_epochs', type=int, default=4, help='Number of PPO epochs to perform for each update')
     parser.add_argument('--sample_multiplier', type=int, default=4, help='How many x1 samples to generate per x0 sample in the environment')
     parser.add_argument('--order', type=int, default=1, help='Order of the method (1 for linear first order, 2 for cosine second order)')
     parser.add_argument('--latent_dim', type=int, default=512, help='Dimensionality of the latent space of the image state representation')
@@ -365,6 +360,5 @@ if __name__ == "__main__":
             num_ppo_epochs=args.num_ppo_epochs,
             lr=args.lr, weight_decay=args.weight_decay,
             entropy_coef=args.entropy_coef,
-            concentration_penalty_coef=args.concentration_penalty_coef,
             denorm_fn=denorm_fn, 
             logs_path=logs_path, save_path=save_path)
