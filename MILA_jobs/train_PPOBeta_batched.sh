@@ -38,7 +38,7 @@ for DS in "${DATASETS[@]}"; do
             S_MULT=2
             B_SIZE=32
             MB_SIZE=256
-            T_STEPS=8192
+            T_STEPS=4096
             F_DIMS=64
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
