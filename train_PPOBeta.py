@@ -185,7 +185,6 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
         epoch_value_loss = 0.0
         epoch_entropy = 0.0
         epoch_total_loss = 0.0
-        epoch_concentration_penalty = 0.0
         epoch_kl = 0.0
         update_count = 0
 
@@ -220,7 +219,6 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             logger.add_scalar('Loss/Entropy', epoch_entropy, epoch)
             logger.add_scalar('Loss/KL', epoch_kl, epoch)
             logger.add_scalar('Loss/Total', epoch_total_loss, epoch)
-            logger.add_scalar('Loss/ConcentrationPenalty', epoch_concentration_penalty, epoch)
             
             if epoch % 20 == 0:
                 final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
