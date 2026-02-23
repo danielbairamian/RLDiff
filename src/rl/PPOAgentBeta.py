@@ -192,7 +192,7 @@ class PPOAgent(nn.Module):
         excess = F.softplus(self.excess_head(combined))
         alpha  = 1.0 + mean         * excess
         beta   = 1.0 + (1.0 - mean) * excess
-        return alpha, beta, mean
+        return alpha, beta
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
@@ -201,14 +201,15 @@ class PPOAgent(nn.Module):
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
 
-        conc_alpha, conc_beta, mean = self._concentration_params(combined)
+        conc_alpha, conc_beta = self._concentration_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         value = self.mc_layer.get_mean_only(combined)
 
         if deterministic:
             # Mode = (α-1)/(α+β-2) = mean*excess/excess = sigmoid(raw_mean)
             # The mean head IS the deterministic action — exact, no division needed.
-            action = mean
+            # action = torch.sigmoid(self.mean_head(combined))
+            action = conc_alpha / (conc_alpha + conc_beta)  # mean action = α / (α + β)
         else:
             action = dist.sample()
 
@@ -231,7 +232,7 @@ class PPOAgent(nn.Module):
 
         combined = self.backbone(state_enc, alpha_t, steps)
 
-        conc_alpha, conc_beta, mean = self._concentration_params(combined)
+        conc_alpha, conc_beta = self._concentration_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         value = self.mc_layer.get_mean_only(combined)
 
