@@ -11,33 +11,28 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 
 
 # ---------------------------------------------------------------------------
-# Beta Policy Head — Log-Space Parameterization
+# Beta Policy Head — Mean/Concentration Parameterization
 # ---------------------------------------------------------------------------
-# The network outputs raw_alpha, raw_beta (unconstrained).
-# We map them to concentration params via:
+# Instead of outputting α and β directly, the network outputs:
 #
-#   α = exp(raw_alpha) + 1     → α > 1  always
-#   β = exp(raw_beta)  + 1     → β > 1  always
+#   m = sigmoid(raw_mean)                    ∈ (0, 1)   — where to step
+#   c = softplus(raw_concentration) + 2     ∈ (2, ∞)   — how confident
 #
-# Why log-space over softplus:
-#   - Concentration spans many orders of magnitude (2 → 1000+) during training
-#   - In log-space, AdamW updates are scale-invariant: a step of δ in raw
-#     space always means a ~δ*100% multiplicative change in α, whether
-#     α is 5 or 5000. softplus is approximately linear at large values,
-#     giving fixed *absolute* steps regardless of current scale.
+# Then α = m * c  and  β = (1-m) * c
 #
-# Why no saturation:
-#   - Hard clamps kill gradients outside the range
-#   - Smooth saturation (tanh-based) introduces an arbitrary scale constant
-#   - The training loop already has clip_grad_norm_(0.5) which is the
-#     correct place to handle runaway updates — no need to also saturate
-#     inside the network
+# Why this is better than raw α/β:
+#   - Mean head is bounded by sigmoid — cannot explode by construction
+#   - Concentration head uses softplus which grows linearly for large inputs:
+#     to get c=1e5, the raw output must itself be ~1e5. With exp, only log(1e5)≈11.5
+#     is needed — a small number easily reached in a few hundred updates.
+#     Softplus makes explosion practically unreachable under normal gradient clipping.
+#   - Mean and concentration are decoupled — a large concentration update
+#     doesn't corrupt the mean, and vice versa. Previously α and β could
+#     drift independently, producing nonsensical mean/concentration combinations.
 #
 # Deterministic action = mode = (α-1)/(α+β-2)
-#   - Always valid since α,β > 1 is guaranteed by construction
+#   - Always valid since α = m*c > 1 and β = (1-m)*c > 1 when c > 2, m ∈ (0,1)
 #   - The principled MAP estimate — the single most probable action
-#   - Mean was only ever a workaround for early training instability;
-#     if initialization is correct, mode is always the right choice
 # ---------------------------------------------------------------------------
 
 
@@ -138,21 +133,23 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        self.alpha_head = nn.Linear(backbone_dim, action_dim)
-        self.beta_head  = nn.Linear(backbone_dim, action_dim)
+        # Two decoupled heads with activations matched to their natural ranges
+        self.mean_head          = nn.Linear(backbone_dim, action_dim)  # sigmoid  → (0, 1)
+        self.concentration_head = nn.Linear(backbone_dim, action_dim)  # softplus → (0, ∞), +2 ensures α,β > 1
 
-        # Log-space initialization:
-        # We want exp(raw_bias) + 1 = desired_param  →  raw_bias = log(desired - 1)
-        desired_alpha = max(1.01, mean_action_init * concentration_init)
-        desired_beta  = max(1.01, (1.0 - mean_action_init) * concentration_init)
-        raw_alpha_bias = np.log(desired_alpha - 1.0)
-        raw_beta_bias  = np.log(desired_beta  - 1.0)
+        # Initialization:
+        #   sigmoid(mean_bias) = mean_action_init
+        #     → mean_bias = log(m / (1-m))   (logit)
+        #   softplus(conc_bias) + 2 = concentration_init
+        #     → conc_bias = log(exp(concentration_init - 2) - 1)   (softplus inverse)
+        mean_bias  = np.log(mean_action_init / (1.0 - mean_action_init))
+        conc_bias  = np.log(np.exp(max(concentration_init - 2.0, 1e-6)) - 1.0)
 
         with torch.no_grad():
-            self.alpha_head.bias.normal_(raw_alpha_bias, 0.01)
-            self.alpha_head.weight.normal_(0, 0.01)
-            self.beta_head.bias.normal_(raw_beta_bias, 0.01)
-            self.beta_head.weight.normal_(0, 0.01)
+            self.mean_head.bias.normal_(mean_bias, 0.01)
+            self.mean_head.weight.normal_(0, 0.01)
+            self.concentration_head.bias.normal_(conc_bias, 0.01)
+            self.concentration_head.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
@@ -164,17 +161,19 @@ class PPOAgent(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # Helper: raw network outputs → Beta concentration params (log-space)
+    # Helper: network outputs → Beta α and β
     # ------------------------------------------------------------------
     def _concentration_params(self, combined: torch.Tensor):
         """
-        Returns (alpha, beta) — both > 1, shape (B, action_dim).
-        exp maps unconstrained raw outputs to (0, ∞), +1 ensures > 1.
-        Gradient clipping in the training loop (clip_grad_norm_) is the
-        sole protection against explosion — no saturation inside the network.
+        mean          = sigmoid(raw_mean)            ∈ (0, 1)   — bounded, cannot explode
+        concentration = softplus(raw_conc) + 2       ∈ (2, ∞)   — linear growth, slow to explode
+        alpha         = mean * concentration          > 1  always (since c > 2 and m > 0)
+        beta          = (1 - mean) * concentration    > 1  always (since c > 2 and m < 1)
         """
-        alpha = torch.exp(self.alpha_head(combined)) + 1.0 + 1e-6  # Add small epsilon to ensure strictly > 1, preventing numerical issues in Beta distribution
-        beta  = torch.exp(self.beta_head(combined))  + 1.0 + 1e-6  # Same epsilon for beta to ensure numerical stability, even if it starts near 1.0
+        mean          = torch.sigmoid(self.mean_head(combined))
+        concentration = F.softplus(self.concentration_head(combined)) + 2.0
+        alpha = mean * concentration
+        beta  = (1.0 - mean) * concentration
         return alpha, beta
 
     # ------------------------------------------------------------------
@@ -189,12 +188,8 @@ class PPOAgent(nn.Module):
         value = self.mc_layer.get_mean_only(combined)
 
         if deterministic:
-            # Mode = (α-1)/(α+β-2) — always valid since α,β > 1 by construction.
-            # This is the MAP estimate: the single most probable action.
-            action_mode = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
-            action_mean = conc_alpha / (conc_alpha + conc_beta)
-            # action = action_mode
-            action = action_mean 
+            # Mode = (α-1)/(α+β-2) — always valid since α,β > 1 by construction
+            action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
         else:
             action = dist.sample()
 

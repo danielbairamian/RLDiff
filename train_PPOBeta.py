@@ -120,6 +120,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         'concentrations_a': b_concentrations_a,
         'concentrations_b': b_concentrations_b,
         'concentrations' : b_concentrations_a + b_concentrations_b,
+        'beta_mean': b_concentrations_a  / (b_concentrations_a + b_concentrations_b + 1e-8),
     }.items()}
 
     episode_lengths = active_mask.float().sum(dim=0)
