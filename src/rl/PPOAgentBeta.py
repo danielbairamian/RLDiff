@@ -189,7 +189,8 @@ class PPOAgent(nn.Module):
 
         if deterministic:
             # Mode = (α-1)/(α+β-2) — always valid since α,β > 1 by construction
-            action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
+            # action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
+            action = conc_alpha  / (conc_alpha + conc_beta + 1e-8)  # Mean action for logging — more interpretable than mode
         else:
             action = dist.sample()
 
