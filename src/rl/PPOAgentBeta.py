@@ -11,28 +11,43 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 
 
 # ---------------------------------------------------------------------------
-# Beta Policy Head — Mean/Concentration Parameterization
+# Beta Policy Head — Mean / Excess Parameterization
 # ---------------------------------------------------------------------------
-# Instead of outputting α and β directly, the network outputs:
+# The network outputs two heads:
 #
-#   m = sigmoid(raw_mean)                    ∈ (0, 1)   — where to step
-#   c = softplus(raw_concentration) + 2     ∈ (2, ∞)   — how confident
+#   mean   = sigmoid(raw_mean)        ∈ (0, 1)  — where to step
+#   excess = softplus(raw_excess)     ∈ (0, ∞)  — how much above the unimodal floor
 #
-# Then α = m * c  and  β = (1-m) * c
+# α and β are constructed as:
+#   α = 1 + mean   * excess
+#   β = 1 + (1-m)  * excess
 #
-# Why this is better than raw α/β:
-#   - Mean head is bounded by sigmoid — cannot explode by construction
-#   - Concentration head uses softplus which grows linearly for large inputs:
-#     to get c=1e5, the raw output must itself be ~1e5. With exp, only log(1e5)≈11.5
-#     is needed — a small number easily reached in a few hundred updates.
-#     Softplus makes explosion practically unreachable under normal gradient clipping.
-#   - Mean and concentration are decoupled — a large concentration update
-#     doesn't corrupt the mean, and vice versa. Previously α and β could
-#     drift independently, producing nonsensical mean/concentration combinations.
+# Why α,β > 1 is guaranteed (unimodality):
+#   Both terms are 1 + (positive * positive), so strictly > 1 for any network
+#   output — no floor computation needed, it falls out of the algebra directly.
 #
-# Deterministic action = mode = (α-1)/(α+β-2)
-#   - Always valid since α = m*c > 1 and β = (1-m)*c > 1 when c > 2, m ∈ (0,1)
-#   - The principled MAP estimate — the single most probable action
+# Why this is stable:
+#   - mean head: sigmoid bounds it to (0,1), cannot explode
+#   - excess head: softplus grows linearly — to reach excess=1e5 the raw output
+#     must itself be ~1e5. Gradient clipping at 0.5 needs 200k steps to get there.
+#
+# Interpretable quantities:
+#   total concentration = α + β = 2 + excess
+#   mean action         = α / (α + β)  =  (1 + mean*excess) / (2 + excess)
+#                       → approaches sigmoid(raw_mean) as excess → ∞
+#
+# Deterministic action = mode = (α-1)/(α+β-2) = mean*excess / excess = mean
+#   Simplifies to exactly sigmoid(raw_mean) — the mean head output directly.
+#   This is clean: the mean head IS the deterministic action, no extra computation.
+#
+# Initialization:
+#   concentration_init sets the desired starting α+β = 2 + excess
+#   → excess_init = concentration_init - 2   (must be > 0, so conc_init > 2)
+#   → conc_bias   = softplus_inv(excess_init) = log(exp(excess_init) - 1)
+#   mean_bias     = logit(mean_action_init)   = log(m / (1-m))
+#
+# Near-uniform init: mean_action_init=0.5, concentration_init=2.1
+#   → excess=0.1, α=β=1.05, maximally flat unimodal Beta
 # ---------------------------------------------------------------------------
 
 
@@ -121,10 +136,11 @@ class PPOAgent(nn.Module):
         action_dim: int,
         act_min: float = 0.0,
         act_max: float = 1.0,
-        mean_action_init: float = 0.1,
-        concentration_init: float = 4.0,
+        mean_action_init: float = 0.5,
+        concentration_init: float = 2.1,   # must be > 2; sets starting α+β
     ):
         super(PPOAgent, self).__init__()
+
 
         self.register_buffer('act_min', torch.tensor(act_min, dtype=torch.float32))
         self.register_buffer('act_max', torch.tensor(act_max, dtype=torch.float32))
@@ -133,23 +149,22 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        # Two decoupled heads with activations matched to their natural ranges
-        self.mean_head          = nn.Linear(backbone_dim, action_dim)  # sigmoid  → (0, 1)
-        self.concentration_head = nn.Linear(backbone_dim, action_dim)  # softplus → (0, ∞), +2 ensures α,β > 1
+        self.mean_head   = nn.Linear(backbone_dim, action_dim)  # sigmoid  → (0, 1)
+        self.excess_head = nn.Linear(backbone_dim, action_dim)  # softplus → (0, ∞)
 
-        # Initialization:
-        #   sigmoid(mean_bias) = mean_action_init
-        #     → mean_bias = log(m / (1-m))   (logit)
-        #   softplus(conc_bias) + 2 = concentration_init
-        #     → conc_bias = log(exp(concentration_init - 2) - 1)   (softplus inverse)
-        mean_bias  = np.log(mean_action_init / (1.0 - mean_action_init))
-        conc_bias  = np.log(np.exp(max(concentration_init - 2.0, 1e-6)) - 1.0)
+        
+        # assert concentration_init > 2.0, "concentration_init must be > 2 (need excess > 0)"
+        # # mean_bias:  sigmoid(bias) = mean_action_init  →  bias = log(m / (1-m))
+        # # excess_bias: softplus(bias) = concentration_init - 2  →  bias = log(exp(c-2) - 1)
+        # mean_bias   = np.log(mean_action_init / (1.0 - mean_action_init))
+        # excess_init = concentration_init - 2.0
+        # excess_bias = np.log(np.exp(excess_init) - 1.0)
 
-        with torch.no_grad():
-            self.mean_head.bias.normal_(mean_bias, 0.01)
-            self.mean_head.weight.normal_(0, 0.01)
-            self.concentration_head.bias.normal_(conc_bias, 0.01)
-            self.concentration_head.weight.normal_(0, 0.01)
+        # with torch.no_grad():
+        #     self.mean_head.bias.normal_(mean_bias, 0.01)
+        #     self.mean_head.weight.normal_(0, 0.01)
+        #     self.excess_head.bias.normal_(excess_bias, 0.01)
+        #     self.excess_head.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
@@ -165,16 +180,19 @@ class PPOAgent(nn.Module):
     # ------------------------------------------------------------------
     def _concentration_params(self, combined: torch.Tensor):
         """
-        mean          = sigmoid(raw_mean)            ∈ (0, 1)   — bounded, cannot explode
-        concentration = softplus(raw_conc) + 2       ∈ (2, ∞)   — linear growth, slow to explode
-        alpha         = mean * concentration          > 1  always (since c > 2 and m > 0)
-        beta          = (1 - mean) * concentration    > 1  always (since c > 2 and m < 1)
+        mean   = sigmoid(raw_mean)       ∈ (0, 1)
+        excess = softplus(raw_excess)    ∈ (0, ∞)
+        α      = 1 + mean   * excess     > 1  always  ✓
+        β      = 1 + (1-m)  * excess     > 1  always  ✓
+
+        Unimodality is guaranteed by construction — no floor needed.
+        Mode simplifies to: (α-1)/(α+β-2) = mean*excess/excess = mean  ✓
         """
-        mean          = torch.sigmoid(self.mean_head(combined))
-        concentration = F.softplus(self.concentration_head(combined)) + 2.0
-        alpha = mean * concentration
-        beta  = (1.0 - mean) * concentration
-        return alpha, beta
+        mean   = torch.sigmoid(self.mean_head(combined))
+        excess = F.softplus(self.excess_head(combined))
+        alpha  = 1.0 + mean         * excess
+        beta   = 1.0 + (1.0 - mean) * excess
+        return alpha, beta, mean
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
@@ -183,14 +201,14 @@ class PPOAgent(nn.Module):
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
 
-        conc_alpha, conc_beta = self._concentration_params(combined)
+        conc_alpha, conc_beta, mean = self._concentration_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         value = self.mc_layer.get_mean_only(combined)
 
         if deterministic:
-            # Mode = (α-1)/(α+β-2) — always valid since α,β > 1 by construction
-            # action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
-            action = conc_alpha  / (conc_alpha + conc_beta + 1e-8)  # Mean action for logging — more interpretable than mode
+            # Mode = (α-1)/(α+β-2) = mean*excess/excess = sigmoid(raw_mean)
+            # The mean head IS the deterministic action — exact, no division needed.
+            action = mean
         else:
             action = dist.sample()
 
@@ -207,13 +225,13 @@ class PPOAgent(nn.Module):
         if actions.dim() == 1:
             actions = actions.unsqueeze(-1)
 
-        # Clamp stored actions away from hard boundaries — this is data,
-        # not network outputs, so killing gradients here is harmless.
+        # Clamp stored actions away from hard boundaries — data, not network
+        # outputs, so killing gradients here is harmless.
         actions = actions.clamp(1e-6, 1.0 - 1e-6)
 
         combined = self.backbone(state_enc, alpha_t, steps)
 
-        conc_alpha, conc_beta = self._concentration_params(combined)
+        conc_alpha, conc_beta, mean = self._concentration_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         value = self.mc_layer.get_mean_only(combined)
 
