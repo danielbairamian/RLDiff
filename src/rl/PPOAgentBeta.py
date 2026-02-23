@@ -11,44 +11,33 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 
 
 # ---------------------------------------------------------------------------
-# Beta Policy Head — Mean / Excess Parameterization
+# Beta Policy Head — Joint α/β Estimation
 # ---------------------------------------------------------------------------
-# The network outputs two heads:
+# A single head outputs 2 * action_dim values, chunked into raw_alpha, raw_beta.
 #
-#   mean   = sigmoid(raw_mean)        ∈ (0, 1)  — where to step
-#   excess = softplus(raw_excess)     ∈ (0, ∞)  — how much above the unimodal floor
+#   α = softplus(clamp(raw_alpha, min=RAW_MIN)) + 1.0
+#   β = softplus(clamp(raw_beta,  min=RAW_MIN)) + 1.0
 #
-# α and β are constructed as:
-#   α = 1 + mean   * excess
-#   β = 1 + (1-m)  * excess
+# Why joint over two separate heads:
+#   - α and β are not independent given the state: a larger desired step (high α)
+#     should come with lower relative confidence (higher β) since big steps are riskier
+#   - A single weight matrix encodes the α/β relationship directly rather than
+#     forcing two independent heads to discover the correlation from scratch
+#   - Same parameter count as two separate heads, no extra cost
 #
-# Why α,β > 1 is guaranteed (unimodality):
-#   Both terms are 1 + (positive * positive), so strictly > 1 for any network
-#   output — no floor computation needed, it falls out of the algebra directly.
+# Why clamp(min=RAW_MIN) on the input to softplus:
+#   - softplus(x) → 0 as x → -∞, gradient → 0 → α → 1 exactly → stuck forever
+#   - RAW_MIN = -9.21 floors input: softplus(-9.21) ≈ 0.0001 → α,β ≥ 1.0001
+#   - gradient at floor: sigmoid(-9.21) ≈ 0.0001 — tiny but nonzero, never exactly zero
+#   - no upper clamp: softplus grows linearly, gradient clipping handles explosion
 #
-# Why this is stable:
-#   - mean head: sigmoid bounds it to (0,1), cannot explode
-#   - excess head: softplus grows linearly — to reach excess=1e5 the raw output
-#     must itself be ~1e5. Gradient clipping at 0.5 needs 200k steps to get there.
-#
-# Interpretable quantities:
-#   total concentration = α + β = 2 + excess
-#   mean action         = α / (α + β)  =  (1 + mean*excess) / (2 + excess)
-#                       → approaches sigmoid(raw_mean) as excess → ∞
-#
-# Deterministic action = mode = (α-1)/(α+β-2) = mean*excess / excess = mean
-#   Simplifies to exactly sigmoid(raw_mean) — the mean head output directly.
-#   This is clean: the mean head IS the deterministic action, no extra computation.
-#
-# Initialization:
-#   concentration_init sets the desired starting α+β = 2 + excess
-#   → excess_init = concentration_init - 2   (must be > 0, so conc_init > 2)
-#   → conc_bias   = softplus_inv(excess_init) = log(exp(excess_init) - 1)
-#   mean_bias     = logit(mean_action_init)   = log(m / (1-m))
-#
-# Near-uniform init: mean_action_init=0.5, concentration_init=2.1
-#   → excess=0.1, α=β=1.05, maximally flat unimodal Beta
+# RAW_MIN = log(10000) = 9.21: chosen so softplus(RAW_MIN) ≈ 0.0001
+# Unimodality: α,β > 1 always ✓
+# Mode = (α-1)/(α+β-2) — always valid, used for deterministic action
 # ---------------------------------------------------------------------------
+
+# RAW_MIN = -9.21   # log(10000): softplus(RAW_MIN) ≈ 0.0001 → α,β ≥ 1.0001
+RAW_MIN = -8.0 # softer clamp to allow more exploration early on, still prevents exact zero gradient
 
 
 class NeRFEmbedder(nn.Module):
@@ -137,10 +126,11 @@ class PPOAgent(nn.Module):
         act_min: float = 0.0,
         act_max: float = 1.0,
         mean_action_init: float = 0.5,
-        concentration_init: float = 2.1,   # must be > 2; sets starting α+β
+        concentration_init: float = 2.1,
     ):
         super(PPOAgent, self).__init__()
 
+        self.action_dim = action_dim
 
         self.register_buffer('act_min', torch.tensor(act_min, dtype=torch.float32))
         self.register_buffer('act_max', torch.tensor(act_max, dtype=torch.float32))
@@ -149,22 +139,9 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        self.mean_head   = nn.Linear(backbone_dim, action_dim)  # sigmoid  → (0, 1)
-        self.excess_head = nn.Linear(backbone_dim, action_dim)  # softplus → (0, ∞)
-
-        
-        # assert concentration_init > 2.0, "concentration_init must be > 2 (need excess > 0)"
-        # # mean_bias:  sigmoid(bias) = mean_action_init  →  bias = log(m / (1-m))
-        # # excess_bias: softplus(bias) = concentration_init - 2  →  bias = log(exp(c-2) - 1)
-        # mean_bias   = np.log(mean_action_init / (1.0 - mean_action_init))
-        # excess_init = concentration_init - 2.0
-        # excess_bias = np.log(np.exp(excess_init) - 1.0)
-
-        # with torch.no_grad():
-        #     self.mean_head.bias.normal_(mean_bias, 0.01)
-        #     self.mean_head.weight.normal_(0, 0.01)
-        #     self.excess_head.bias.normal_(excess_bias, 0.01)
-        #     self.excess_head.weight.normal_(0, 0.01)
+        # Single joint head — outputs raw_alpha and raw_beta concatenated.
+        # The weight matrix encodes the α/β relationship directly.
+        self.ab_head = nn.Linear(backbone_dim, action_dim * 2)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
@@ -176,22 +153,21 @@ class PPOAgent(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # Helper: network outputs → Beta α and β
+    # Helper: raw outputs → α, β
     # ------------------------------------------------------------------
     def _concentration_params(self, combined: torch.Tensor):
         """
-        mean   = sigmoid(raw_mean)       ∈ (0, 1)
-        excess = softplus(raw_excess)    ∈ (0, ∞)
-        α      = 1 + mean   * excess     > 1  always  ✓
-        β      = 1 + (1-m)  * excess     > 1  always  ✓
+        raw       : (B, 2 * action_dim) — joint output, chunked into α and β halves
+        raw_alpha : (B, action_dim)
+        raw_beta  : (B, action_dim)
 
-        Unimodality is guaranteed by construction — no floor needed.
-        Mode simplifies to: (α-1)/(α+β-2) = mean*excess/excess = mean  ✓
+        clamp(min=RAW_MIN) floors the softplus input so α,β ≥ 1.0001 always.
+        Gradient at floor = sigmoid(RAW_MIN) ≈ 0.0001 — nonzero, never exactly stuck.
+        No upper clamp — gradient clipping in train_PPO handles explosion.
         """
-        mean   = torch.sigmoid(self.mean_head(combined))
-        excess = F.softplus(self.excess_head(combined))
-        alpha  = 1.0 + mean         * excess
-        beta   = 1.0 + (1.0 - mean) * excess
+        raw_alpha, raw_beta = self.ab_head(combined).chunk(2, dim=-1)
+        alpha = F.softplus(raw_alpha.clamp(min=RAW_MIN)) + 1.0
+        beta  = F.softplus(raw_beta.clamp(min=RAW_MIN))  + 1.0
         return alpha, beta
 
     # ------------------------------------------------------------------
@@ -206,10 +182,9 @@ class PPOAgent(nn.Module):
         value = self.mc_layer.get_mean_only(combined)
 
         if deterministic:
-            # Mode = (α-1)/(α+β-2) = mean*excess/excess = sigmoid(raw_mean)
-            # The mean head IS the deterministic action — exact, no division needed.
-            # action = torch.sigmoid(self.mean_head(combined))
-            action = conc_alpha / (conc_alpha + conc_beta)  # mean action = α / (α + β)
+            # Mode = (α-1)/(α+β-2) — always valid since α,β > 1
+            # action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
+            action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
         else:
             action = dist.sample()
 
@@ -226,8 +201,6 @@ class PPOAgent(nn.Module):
         if actions.dim() == 1:
             actions = actions.unsqueeze(-1)
 
-        # Clamp stored actions away from hard boundaries — data, not network
-        # outputs, so killing gradients here is harmless.
         actions = actions.clamp(1e-6, 1.0 - 1e-6)
 
         combined = self.backbone(state_enc, alpha_t, steps)
