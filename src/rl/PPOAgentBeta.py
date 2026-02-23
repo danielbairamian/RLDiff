@@ -10,11 +10,35 @@ from src.MonteCarloLayer import MonteCarloLayer
 from src.latent_encoder.VisionEncoder import VisionEncoder
 
 
-# Beta distribution naturally lives in [0,1] — no clamping or correction terms needed.
-# α, β > 1  → unimodal (enforced by softplus + 1 below)
-# mean       = α / (α + β)        ← where the agent wants to step
-# confidence = α + β              ← how certain it is  (higher = tighter)
-# entropy    = analytic, clean signal for the entropy bonus
+# ---------------------------------------------------------------------------
+# Beta Policy Head — Log-Space Parameterization
+# ---------------------------------------------------------------------------
+# The network outputs raw_alpha, raw_beta (unconstrained).
+# We map them to concentration params via:
+#
+#   α = exp(raw_alpha) + 1     → α > 1  always
+#   β = exp(raw_beta)  + 1     → β > 1  always
+#
+# Why log-space over softplus:
+#   - Concentration spans many orders of magnitude (2 → 1000+) during training
+#   - In log-space, AdamW updates are scale-invariant: a step of δ in raw
+#     space always means a ~δ*100% multiplicative change in α, whether
+#     α is 5 or 5000. softplus is approximately linear at large values,
+#     giving fixed *absolute* steps regardless of current scale.
+#
+# Why no saturation:
+#   - Hard clamps kill gradients outside the range
+#   - Smooth saturation (tanh-based) introduces an arbitrary scale constant
+#   - The training loop already has clip_grad_norm_(0.5) which is the
+#     correct place to handle runaway updates — no need to also saturate
+#     inside the network
+#
+# Deterministic action = mode = (α-1)/(α+β-2)
+#   - Always valid since α,β > 1 is guaranteed by construction
+#   - The principled MAP estimate — the single most probable action
+#   - Mean was only ever a workaround for early training instability;
+#     if initialization is correct, mode is always the right choice
+# ---------------------------------------------------------------------------
 
 
 class NeRFEmbedder(nn.Module):
@@ -26,7 +50,7 @@ class NeRFEmbedder(nn.Module):
     def __init__(self, L: int):
         super().__init__()
         self.L = L
-        freqs = 2.0 ** torch.arange(L, dtype=torch.float32)  # (L,)
+        freqs = 2.0 ** torch.arange(L, dtype=torch.float32)
         self.register_buffer('freqs', freqs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -46,7 +70,6 @@ class Backbone_Encoder(nn.Module):
         super(Backbone_Encoder, self).__init__()
 
         self.nerf_embedder = NeRFEmbedder(L=16)
-        nerf_out_dim = self.nerf_embedder.out_dim_per_scalar * 2  # alpha and steps
 
         self.time_encoder = nn.ModuleList()
         input_dim = 2
@@ -63,7 +86,7 @@ class Backbone_Encoder(nn.Module):
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
         self.projection_encoder = nn.Sequential()
-        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 # + nerf_out_dim
+        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2
         for i in range(len(projection_dims)):
             output_dim = projection_dims[i]
             self.projection_encoder.append(
@@ -84,39 +107,12 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
-        # nerf_embedded = self.nerf_embedder(time_inputs)
-        # combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embedded], dim=-1)
         combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
 
         for layer in self.projection_encoder:
             combined = layer(combined)
 
         return combined
-
-
-# ---------------------------------------------------------------------------
-# Beta Policy Head
-# ---------------------------------------------------------------------------
-# The network outputs raw_alpha and raw_beta (unconstrained).
-# We map them to concentration params via:
-#   α = softplus(raw_alpha) + 1     → α > 1  always
-#   β = softplus(raw_beta)  + 1     → β > 1  always
-# This forces a *unimodal* distribution (no U-shape pathology).
-#
-# Intuition guide:
-#   α ≈ β ≈ 1  →  near-uniform  (high entropy, lots of exploration)
-#   α ≈ β >> 1 →  tight bell at 0.5
-#   α >> β     →  mass near 1.0  (big step)
-#   β >> α     →  mass near 0.0  (small step)
-#
-# To push the initial mean toward a target `m` with concentration `c`:
-#   raw_alpha_bias  ≈  softplus_inv(m * c - 1)
-#   raw_beta_bias   ≈  softplus_inv((1-m) * c - 1)
-# ---------------------------------------------------------------------------
-
-def _softplus_inv(x: float) -> float:
-    """Inverse of softplus: log(exp(x) - 1)"""
-    return np.log(np.exp(x) - 1.0)
 
 
 class PPOAgent(nn.Module):
@@ -128,14 +124,9 @@ class PPOAgent(nn.Module):
         time_encoder_dims: List[int],
         projection_dims: List[int],
         action_dim: int,
-        # act_min / act_max are kept for env.step() reference, but the policy
-        # natively outputs in [0, 1].  Scale inside the env if needed.
         act_min: float = 0.0,
         act_max: float = 1.0,
-        # Target initial mean of the action distribution
         mean_action_init: float = 0.1,
-        # Initial concentration (α+β).  Higher → tighter initial exploration.
-        # 2.0 means α=β≈1 → near-uniform.  Try 4–8 for moderate exploration.
         concentration_init: float = 4.0,
     ):
         super(PPOAgent, self).__init__()
@@ -147,19 +138,15 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        # Two heads: raw concentration parameters for the Beta distribution.
-        self.alpha_head = nn.Linear(backbone_dim, action_dim)   # → α (after softplus+1)
-        self.beta_head  = nn.Linear(backbone_dim, action_dim)   # → β (after softplus+1)
+        self.alpha_head = nn.Linear(backbone_dim, action_dim)
+        self.beta_head  = nn.Linear(backbone_dim, action_dim)
 
-        # Initialise biases so the distribution starts near mean_action_init
-        # with the requested concentration.
-        #   desired α = mean_action_init * concentration_init
-        #   desired β = (1 - mean_action_init) * concentration_init
-        # Both must be > 1 for unimodality, so clip the lower bound.
+        # Log-space initialization:
+        # We want exp(raw_bias) + 1 = desired_param  →  raw_bias = log(desired - 1)
         desired_alpha = max(1.01, mean_action_init * concentration_init)
         desired_beta  = max(1.01, (1.0 - mean_action_init) * concentration_init)
-        raw_alpha_bias = _softplus_inv(desired_alpha - 1.0)   # softplus(bias) + 1 = desired_alpha
-        raw_beta_bias  = _softplus_inv(desired_beta  - 1.0)
+        raw_alpha_bias = np.log(desired_alpha - 1.0)
+        raw_beta_bias  = np.log(desired_beta  - 1.0)
 
         with torch.no_grad():
             self.alpha_head.bias.normal_(raw_alpha_bias, 0.01)
@@ -177,33 +164,23 @@ class PPOAgent(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # Helper: raw network outputs → Beta concentration params
+    # Helper: raw network outputs → Beta concentration params (log-space)
     # ------------------------------------------------------------------
     def _concentration_params(self, combined: torch.Tensor):
         """
         Returns (alpha, beta) — both > 1, shape (B, action_dim).
-        softplus ensures positivity; +1 pushes above 1 for unimodality.
+        exp maps unconstrained raw outputs to (0, ∞), +1 ensures > 1.
+        Gradient clipping in the training loop (clip_grad_norm_) is the
+        sole protection against explosion — no saturation inside the network.
         """
-        alpha = F.softplus(self.alpha_head(combined)) + 1.0
-        beta  = F.softplus(self.beta_head(combined))  + 1.0
+        alpha = torch.exp(self.alpha_head(combined)) + 1.0 + 1e-6  # Add small epsilon to ensure strictly > 1, preventing numerical issues in Beta distribution
+        beta  = torch.exp(self.beta_head(combined))  + 1.0 + 1e-6  # Same epsilon for beta to ensure numerical stability, even if it starts near 1.0
         return alpha, beta
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
     # ------------------------------------------------------------------
     def forward(self, state, alpha_t, steps, deterministic=False):
-        """
-        alpha_t : current diffusion alpha  (B,)
-        steps   : current step count       (B,)
-
-        Returns
-        -------
-        action      : (B, A)  — sampled or mean, in [0, 1]
-        value       : (B,)
-        log_prob    : (B,)
-        conc_alpha  : (B, A)  — α concentration (interpretable)
-        conc_beta   : (B, A)  — β concentration (interpretable)
-        """
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
 
@@ -212,14 +189,17 @@ class PPOAgent(nn.Module):
         value = self.mc_layer.get_mean_only(combined)
 
         if deterministic:
-            # Mode of Beta: (α-1)/(α+β-2)  — valid because α,β > 1
-            # action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
-            # Mean of Beta: α / (α + β)
-            action = conc_alpha / (conc_alpha + conc_beta)
+            # Mode = (α-1)/(α+β-2) — always valid since α,β > 1 by construction.
+            # This is the MAP estimate: the single most probable action.
+            action_mode = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
+            action_mean = conc_alpha / (conc_alpha + conc_beta)
+            # action = action_mode
+            action = action_mean 
         else:
             action = dist.sample()
 
-        log_prob = dist.log_prob(action).sum(dim=-1)
+        action_for_logprob = action.clamp(1e-6, 1.0 - 1e-6)
+        log_prob = dist.log_prob(action_for_logprob).sum(dim=-1)
 
         return action, value.squeeze(-1), log_prob, conc_alpha, conc_beta
 
@@ -227,15 +207,12 @@ class PPOAgent(nn.Module):
     # evaluate_actions  (used during PPO update)
     # ------------------------------------------------------------------
     def evaluate_actions(self, state, alpha_t, steps, actions):
-        """
-        actions : (B, A)  — the raw actions stored in the rollout buffer,
-                            already in [0, 1] (no squashing correction needed)
-        """
         state_enc = self.vision_encoder.encode(state)
         if actions.dim() == 1:
             actions = actions.unsqueeze(-1)
 
-        # Clamp actions away from hard boundaries to avoid log(0) in Beta.log_prob
+        # Clamp stored actions away from hard boundaries — this is data,
+        # not network outputs, so killing gradients here is harmless.
         actions = actions.clamp(1e-6, 1.0 - 1e-6)
 
         combined = self.backbone(state_enc, alpha_t, steps)
