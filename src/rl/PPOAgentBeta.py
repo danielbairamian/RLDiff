@@ -36,9 +36,7 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 # Mode = (α-1)/(α+β-2) — always valid, used for deterministic action
 # ---------------------------------------------------------------------------
 
-# RAW_MIN = -9.21   # log(10000): softplus(RAW_MIN) ≈ 0.0001 → α,β ≥ 1.0001
-RAW_MIN = -8.0 # softer clamp to allow more exploration early on, still prevents exact zero gradient
-
+KAPPA_MIN = 2.005   # Minimum κ = α+β; ensures α, β > 1 (unimodal Beta)
 
 class NeRFEmbedder(nn.Module):
     """
@@ -139,9 +137,7 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        # Single joint head — outputs raw_alpha and raw_beta concatenated.
-        # The weight matrix encodes the α/β relationship directly.
-        self.ab_head = nn.Linear(backbone_dim, action_dim * 2)
+        self.mean_concentration_head = nn.Linear(backbone_dim, 2 * action_dim)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
@@ -156,18 +152,12 @@ class PPOAgent(nn.Module):
     # Helper: raw outputs → α, β
     # ------------------------------------------------------------------
     def _concentration_params(self, combined: torch.Tensor):
-        """
-        raw       : (B, 2 * action_dim) — joint output, chunked into α and β halves
-        raw_alpha : (B, action_dim)
-        raw_beta  : (B, action_dim)
-
-        clamp(min=RAW_MIN) floors the softplus input so α,β ≥ 1.0001 always.
-        Gradient at floor = sigmoid(RAW_MIN) ≈ 0.0001 — nonzero, never exactly stuck.
-        No upper clamp — gradient clipping in train_PPO handles explosion.
-        """
-        raw_alpha, raw_beta = self.ab_head(combined).chunk(2, dim=-1)
-        alpha = F.softplus(raw_alpha.clamp(min=RAW_MIN)) + 1.0
-        beta  = F.softplus(raw_beta.clamp(min=RAW_MIN))  + 1.0
+        raw_mean, raw_conc = self.mean_concentration_head(combined).chunk(2, dim=-1) 
+        mu = torch.sigmoid(raw_mean)  # (0,1)
+        kappa = F.softplus(raw_conc) + KAPPA_MIN  # > KAPPA_MIN to ensure unimodality
+        excess = kappa - 2.0  # κ = α + β, so excess over 2 is split between α and β    
+        alpha = 1.0 + mu * excess
+        beta  = 1.0 + (1.0 - mu) * excess
         return alpha, beta
 
     # ------------------------------------------------------------------
