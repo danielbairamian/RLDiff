@@ -11,29 +11,40 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 
 
 # ---------------------------------------------------------------------------
-# Beta Policy Head — Joint α/β Estimation
+# Beta Policy Head — Mean / Log-Concentration Parameterization
 # ---------------------------------------------------------------------------
-# A single head outputs 2 * action_dim values, chunked into raw_alpha, raw_beta.
+# A single head outputs 2 * action_dim values, chunked into (raw_mean, raw_conc).
 #
-#   α = softplus(clamp(raw_alpha, min=RAW_MIN)) + 1.0
-#   β = softplus(clamp(raw_beta,  min=RAW_MIN)) + 1.0
+#   μ     = sigmoid(raw_mean)                    — Beta mode, ∈ (0, 1)
+#   κ     = exp(raw_conc) + KAPPA_MIN            — total concentration α+β
+#   α     = 1 + μ · (κ − 2)
+#   β     = 1 + (1 − μ) · (κ − 2)
 #
-# Why joint over two separate heads:
-#   - α and β are not independent given the state: a larger desired step (high α)
-#     should come with lower relative confidence (higher β) since big steps are riskier
-#   - A single weight matrix encodes the α/β relationship directly rather than
-#     forcing two independent heads to discover the correlation from scratch
-#   - Same parameter count as two separate heads, no extra cost
+# Key identities:
+#   mode  = (α−1)/(α+β−2) = μ                   — mode equals sigmoid output
+#   mean  = α / (α+β) = (1 + μ(κ−2)) / κ        — ≈ μ for large κ
+#   α + β = κ                                    — concentration is explicit
+#   α, β  > 1 always                             — unimodal Beta guaranteed
 #
-# Why clamp(min=RAW_MIN) on the input to softplus:
-#   - softplus(x) → 0 as x → -∞, gradient → 0 → α → 1 exactly → stuck forever
-#   - RAW_MIN = -9.21 floors input: softplus(-9.21) ≈ 0.0001 → α,β ≥ 1.0001
-#   - gradient at floor: sigmoid(-9.21) ≈ 0.0001 — tiny but nonzero, never exactly zero
-#   - no upper clamp: softplus grows linearly, gradient clipping handles explosion
+# Why this prevents α from sticking at 1 (the original bug):
+#   - Old approach: α = softplus(clamp(raw, min=RAW_MIN)) + 1
+#     clamp has exactly zero gradient below threshold → α trapped at ~1 → β explodes.
+#   - New approach: α = 1 + μ · (κ − 2)
+#     For α→1 you need μ→0, but:
+#       dα/d(raw_mean) = (κ−2) · μ(1−μ)
+#     As the network learns high concentration (κ → 1000 for tight distributions),
+#     the gradient GROWS proportionally: 998 × 0.001 ≈ 1.0 even at μ = 0.001.
+#     The concentration compensates for sigmoid saturation — they can't both vanish.
 #
-# RAW_MIN = log(10000) = 9.21: chosen so softplus(RAW_MIN) ≈ 0.0001
-# Unimodality: α,β > 1 always ✓
-# Mode = (α-1)/(α+β-2) — always valid, used for deterministic action
+# Why exp for concentration (not softplus):
+#   - Exp gives true log-space parameterization: raw_conc = log(κ − κ_min).
+#     κ = 10 → 100 takes the same optimizer step as κ = 100 → 1000.
+#   - For actions ~ 1/1000: μ = 0.001, κ = 1002 → α ≈ 2, β ≈ 1000,
+#     raw_conc ≈ 6.9 — a normal network output.
+#   - Gradient dκ/d(raw_conc) = exp(raw_conc) = κ − κ_min, never exactly zero.
+#
+# KAPPA_MIN = 2.005: floor on total concentration.
+#   Guarantees κ − 2 ≥ 0.005 > 0, so α, β > 1 strictly.
 # ---------------------------------------------------------------------------
 
 KAPPA_MIN = 2.005   # Minimum κ = α+β; ensures α, β > 1 (unimodal Beta)
@@ -75,7 +86,7 @@ class Backbone_Encoder(nn.Module):
             self.time_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.SiLU(),
+                    nn.Tanh(),
                 )
             )
             input_dim = output_dim
@@ -89,7 +100,7 @@ class Backbone_Encoder(nn.Module):
             self.projection_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.SiLU(),
+                    nn.Tanh(),
                 )
             )
             input_dim = output_dim
@@ -153,9 +164,9 @@ class PPOAgent(nn.Module):
     # ------------------------------------------------------------------
     def _concentration_params(self, combined: torch.Tensor):
         raw_mean, raw_conc = self.mean_concentration_head(combined).chunk(2, dim=-1) 
-        mu = torch.sigmoid(raw_mean)  # (0,1)
-        kappa = F.softplus(raw_conc) + KAPPA_MIN  # > KAPPA_MIN to ensure unimodality
-        excess = kappa - 2.0  # κ = α + β, so excess over 2 is split between α and β    
+        mu = torch.sigmoid(raw_mean)              # mode ∈ (0, 1)
+        kappa = torch.exp(raw_conc) + KAPPA_MIN  # log-space parameterization of concentration
+        excess = kappa - 2.0                        # ≥ KAPPA_MIN − 2 > 0
         alpha = 1.0 + mu * excess
         beta  = 1.0 + (1.0 - mu) * excess
         return alpha, beta
