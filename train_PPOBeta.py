@@ -170,7 +170,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
             for key in full_rollout.keys()
         }
 
-        new_logprobs, new_values, entropy, conc_alpha, conc_beta = ppo_agent.evaluate_actions(
+        new_logprobs, new_values, entropy, conc_alpha, conc_beta, net_dict = ppo_agent.evaluate_actions(
             minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions']
         )
         kl        = new_logprobs - minibatch['logprobs']
@@ -189,7 +189,13 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
         value_loss_clipped   = (v_clipped - v_target) ** 2
         value_loss           = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
-        yield policy_loss, value_loss, entropy.mean(), kl.mean()
+
+        # entropy surrogate loss directly on net_dict's kappa
+        # - entropy_coef * entropy
+        concentration_kappa = net_dict['kappa']  # higher kappa = more confident = lower entropy
+
+
+        yield policy_loss, value_loss, entropy.mean(), kl.mean(), concentration_kappa.mean()
 
 
 def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibatch_size=64,
@@ -223,6 +229,7 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
         epoch_entropy     = 0.0
         epoch_total_loss  = 0.0
         epoch_kl          = 0.0
+        epoch_kappa       = 0.0
         update_count      = 0
 
         rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
@@ -232,11 +239,12 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
             for key in rollout_buffer.keys():
                 rollout_buffer[key] = rollout_buffer[key][perm]
 
-            for policy_loss, value_loss, entropy, kl in ppo_update(
+            for policy_loss, value_loss, entropy, kl, concentration_kappa in ppo_update(
                 ppo_agent, device, minibatch_size, full_rollout=rollout_buffer
             ):
+                concentration_kappa = torch.log(concentration_kappa + 1e-8)  # log-space penalty for stability
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss - entropy_coef * entropy
+                loss = policy_loss + value_loss + (entropy_coef * concentration_kappa)  # - entropy_coef * entropy
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -247,7 +255,7 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
                 epoch_entropy     += (entropy.item()     - epoch_entropy)     / update_count
                 epoch_total_loss  += (loss.item()        - epoch_total_loss)  / update_count
                 epoch_kl          += (kl.item()          - epoch_kl)          / update_count
-
+                epoch_kappa       += (concentration_kappa.item() - epoch_kappa) / update_count  
         test_rollout, debug_dict_test = None, None
         if epoch % 20 == 0:
             test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
@@ -257,6 +265,7 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
             logger.add_scalar('Loss/Value',   epoch_value_loss,  epoch)
             logger.add_scalar('Loss/Entropy', epoch_entropy,     epoch)
             logger.add_scalar('Loss/KL',      epoch_kl,          epoch)
+            logger.add_scalar('Loss/Kappa',   epoch_kappa,       epoch)
             logger.add_scalar('Loss/Total',   epoch_total_loss,  epoch)
 
             if epoch % 20 == 0:
