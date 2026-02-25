@@ -17,8 +17,6 @@ from src.rl.PPOAgent import PPOAgent, VisionEncoder
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
 PPO_EPSILON = 0.2
-STD_LR_BOOST_FARCTOR = 1 # Boost factor for log_std learning rate to encourage exploration early on, can be decayed later if needed
-STATE_STD = True
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -28,16 +26,16 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     B = env.x0.shape[0]
 
     # pre-allocate tensors for the rollout
-    b_states = torch.zeros((T, B, *obs['x0'].shape[1:]), device=env.device)
-    b_alphas = torch.zeros((T, B), device=env.device)
-    b_steps = torch.zeros((T, B), device=env.device)
-    b_actions = torch.zeros((T, B, 1), device=env.device)
-    b_logprobs = torch.zeros((T, B), device=env.device)
-    b_rewards = torch.zeros((T, B), device=env.device)
-    b_dones = torch.zeros((T, B), device=env.device)
-    b_values = torch.zeros((T, B), device=env.device)
-    b_action_means = torch.zeros((T, B, 1), device=env.device) # for debugging and analysis purposes
-    b_action_log_stds = torch.zeros((T, B, 1), device=env.device) # for debugging and analysis purposes
+    b_states = torch.zeros((T, B, *obs['x0'].shape[1:]))
+    b_alphas = torch.zeros((T, B))
+    b_steps = torch.zeros((T, B))
+    b_actions = torch.zeros((T, B, 1))
+    b_logprobs = torch.zeros((T, B))
+    b_rewards = torch.zeros((T, B))
+    b_dones = torch.zeros((T, B))
+    b_values = torch.zeros((T, B))
+    b_action_means = torch.zeros((T, B, 1)) # for debugging and analysis purposes
+    b_action_log_stds = torch.zeros((T, B, 1)) # for debugging and analysis purposes
     final_x0s = None
     terminal_rewards = None
     final_alphas = None
@@ -48,27 +46,29 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     for t in range(T):
         # Here you would typically use your policy to get the action and log probability
         # For demonstration, we'll use random actions and dummy log probabilities
-        action, value, logprob, action_mean, action_log_std = ppo_agent(obs['x0'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic) # Normalize steps to [0, 1] for the agent
+        action, value, logprob, action_mean, action_log_std = ppo_agent(
+            obs['x0'], obs['alpha'], obs['steps'] / env.budget, deterministic=deterministic
+        ) # Normalize steps to [0, 1] for the agent
         next_obs, rewards, dones = env.step(action.squeeze(-1)) # Assuming action shape is (B, 1), squeeze to (B,)
 
         # Store the transition in the rollout buffer
-        b_states[t] = obs['x0']
-        b_alphas[t] = obs['alpha']
-        b_steps[t] = obs['steps'] / env.budget  # Normalize steps to [0, 1]
-        b_actions[t] = action  # Store action without the last dimension
-        b_logprobs[t] = logprob
-        b_rewards[t] = rewards
-        b_dones[t] = dones
-        b_values[t] = value
-        b_action_means[t] = action_mean # Store action mean without the last dimension
-        b_action_log_stds[t] = action_log_std # Store action log std without the last dimension
+        b_states[t] = obs['x0'].cpu()
+        b_alphas[t] = obs['alpha'].cpu()
+        b_steps[t] = (obs['steps'] / env.budget).cpu()  # Normalize steps to [0, 1]
+        b_actions[t] = action.cpu()  # Store action without the last dimension
+        b_logprobs[t] = logprob.cpu()
+        b_rewards[t] = rewards.cpu()
+        b_dones[t] = dones.cpu()
+        b_values[t] = value.cpu()
+        b_action_means[t] = action_mean.cpu() # Store action mean without the last dimension
+        b_action_log_stds[t] = action_log_std.cpu() # Store action log std without the last dimension
 
         obs = next_obs
         if dones.all():
             last_t = t + 1 # +1 to include the final step where all episodes ended
-            final_x0s = obs['x0'] # Store the final x0s for all episodes at the end of the rollout
-            terminal_rewards = rewards
-            final_alphas = obs['alpha']
+            final_x0s = obs['x0'].cpu() # Store the final x0s for all episodes at the end of the rollout
+            terminal_rewards = rewards.cpu()
+            final_alphas = obs['alpha'].cpu()
             break
     
     # Truncate tensors to actual episode length
@@ -83,7 +83,10 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     b_action_means = b_action_means[:last_t]
     b_action_log_stds = b_action_log_stds[:last_t]
 
-    active_mask = ~torch.cat([torch.zeros((1, B), device=b_dones.device, dtype=torch.bool), b_dones[:-1].bool()], dim=0)
+    active_mask = ~torch.cat([
+        torch.zeros((1, B), dtype=torch.bool), 
+        b_dones[:-1].bool()
+    ], dim=0)
     
     # Zero out rewards and values for dead transitions (post-terminal steps)
     # The env returns terminal reward for dead steps, but we only want reward at the actual terminal step
@@ -121,7 +124,7 @@ def generate_rollout(env, ppo_agent, deterministic=False):
     episode_lengths = active_mask.float().sum(dim=0)
     
 
-    debug_dict = {'final_x0s': final_x0s, 
+    debug_dict = {'final_x0s': final_x0s,
                   'terminal_rewards': terminal_rewards, 
                   'episode_lengths': episode_lengths, 
                   'final_alphas': final_alphas}
@@ -150,19 +153,24 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
     }
 
     # normalize advantages
-    full_rollout['advantages'] = (full_rollout['advantages'] - full_rollout['advantages'].mean()) / (full_rollout['advantages'].std() + 1e-8)
+    full_rollout['advantages'] = (full_rollout['advantages'] - full_rollout['advantages'].mean()) / (full_rollout['advantages'].std() + 1e-6)
     return full_rollout, debug_dict # return the final x0s from the last rollout for logging or analysis purposes after the PPO update
 
-def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
+def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
     for i in range(0, full_rollout['states'].shape[0], minibatch_size):
 
         # drop last
         if i + minibatch_size > full_rollout['states'].shape[0]:
             break
 
-        minibatch = {key: full_rollout[key][i:i+minibatch_size] for key in full_rollout.keys()}
+        minibatch = {
+            key: full_rollout[key][i:i+minibatch_size].to(device) 
+            for key in full_rollout.keys()
+        }
 
-        new_logprobs, new_values, entropy, new_action_mean, new_action_log_std = ppo_agent.evaluate_actions(minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions'])
+        new_logprobs, new_values, entropy, new_action_mean, new_action_log_std = ppo_agent.evaluate_actions(
+            minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions']
+        )
         kl = new_logprobs - minibatch['logprobs']
         ratio = torch.exp(kl.clip(-10, 10)) # clip for numerical stability
         surrogate1 = ratio * minibatch['advantages']
@@ -191,29 +199,17 @@ def ppo_update(ppo_agent, minibatch_size=64, full_rollout=None):
 
         upper_bound_violation = F.relu(new_action_mean - act_max_lim)
         lower_bound_violation = F.relu(act_min_lim - new_action_mean)
-        out_of_bound_loss = (upper_bound_violation**2 + lower_bound_violation**2).mean()
+        out_of_bound_loss = (upper_bound_violation**2 + lower_bound_violation**2)
 
-        # std explosion penalty
-        std_penalty = F.relu(new_action_log_std).pow(2).mean()
+        yield policy_loss, value_loss, entropy.mean(), out_of_bound_loss.mean(), kl.mean()
 
-
-        yield policy_loss, value_loss, entropy.mean(), out_of_bound_loss, std_penalty
-
-def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=64, num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, oob_coef=1.0, std_penalty_coef=0.01, denorm_fn=None, logs_path=None, save_path=None):
+def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibatch_size=64, 
+              num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01, 
+              oob_coef=1.0, denorm_fn=None, logs_path=None, save_path=None):
 
     print(f"Training PPO for {num_epochs} epochs with target_steps={target_steps}, minibatch_size={minibatch_size}, num_ppo_epochs={num_ppo_epochs}, lr={lr}, weight_decay={weight_decay}, entropy_coef={entropy_coef}, oob_coef={oob_coef}")
 
-    if not STATE_STD:
-        std_params = [ppo_agent.action_log_std]
-        base_params = [param for name, param in ppo_agent.named_parameters() if 'action_log_std' not in name]
-
-        optimizer = torch.optim.AdamW([
-            {'params': base_params, 'lr': lr, 'weight_decay': weight_decay},
-            {'params': std_params, 'lr': lr * STD_LR_BOOST_FARCTOR, 'weight_decay': 0.0}  # Higher learning rate for log_std
-        ])
-    
-    else:
-        optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
 
     logger = SummaryWriter(logs_path)
 
@@ -235,8 +231,8 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
         epoch_value_loss = 0.0
         epoch_entropy = 0.0
         epoch_total_loss = 0.0
+        epoch_kl = 0.0
         epoch_oob_loss = 0.0
-        epoch_std_penalty = 0.0
         update_count = 0  # Track actual number of minibatch updates
 
         rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
@@ -247,20 +243,23 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             for key in rollout_buffer.keys():
                 rollout_buffer[key] = rollout_buffer[key][perm]
 
-            for policy_loss, value_loss, entropy, out_of_bound_loss, std_penalty in ppo_update(ppo_agent, minibatch_size, full_rollout=rollout_buffer):
+            for policy_loss, value_loss, entropy, out_of_bound_loss, kl in ppo_update(
+                ppo_agent, device, minibatch_size, full_rollout=rollout_buffer
+            ):
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss - entropy_coef * entropy + oob_coef * out_of_bound_loss + std_penalty_coef * std_penalty
+                loss = policy_loss + value_loss - (entropy_coef * entropy) + (oob_coef * out_of_bound_loss)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5) # gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=1.0) # gradient clipping for stability
                 optimizer.step()
 
                 update_count += 1
                 epoch_policy_loss += (policy_loss.item() - epoch_policy_loss) / update_count
                 epoch_value_loss += (value_loss.item() - epoch_value_loss) / update_count
                 epoch_entropy += (entropy.item() - epoch_entropy) / update_count
+                epoch_kl += (kl.item() - epoch_kl) / update_count
                 epoch_total_loss += (loss.item() - epoch_total_loss) / update_count
                 epoch_oob_loss += (out_of_bound_loss.item() - epoch_oob_loss) / update_count
-                epoch_std_penalty += (std_penalty.item() - epoch_std_penalty) / update_count
+
         test_rollout, debug_dict_test = None, None
         if epoch % 20 == 0: # Generate a test rollout every 20 epochs to monitor progress
             test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
@@ -269,9 +268,10 @@ def train_PPO(env, ppo_agent, num_epochs=1000, target_steps=256, minibatch_size=
             logger.add_scalar('Loss/Policy', epoch_policy_loss, epoch)
             logger.add_scalar('Loss/Value', epoch_value_loss, epoch)
             logger.add_scalar('Loss/Entropy', epoch_entropy, epoch)
+            logger.add_scalar('Loss/KL', epoch_kl, epoch)
             logger.add_scalar('Loss/Total', epoch_total_loss, epoch)
             logger.add_scalar('Loss/OutOfBound', epoch_oob_loss, epoch)
-            logger.add_scalar('Loss/StdPenalty', epoch_std_penalty, epoch)
+
             
             if epoch % 20 == 0: # Log rollout image every 20 epochs to avoid excessive logging
                 final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
@@ -364,10 +364,9 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims', type=int, nargs='+', default=[32, 64], help='List of output dimensions for each layer in the time encoder')
     parser.add_argument('--projection_dims', type=int, nargs='+', default=[256, 128], help='List of output dimensions for each layer in the projection encoder')
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef', type=float, default=1e-4, help='Entropy coefficient for PPO')
-    parser.add_argument('--std_penalty_coef', type=float, default=1.0, help='Coefficient for log_std penalty to prevent std explosion')
     parser.add_argument('--oob_coef', type=float, default=1.0, help='Coefficient for out-of-bounds action penalty'  )
     parser.add_argument('--target_steps', type=int, default=512, help='Number of steps to collect for each PPO update')
     parser.add_argument('--minibatch_size', type=int, default=256, help='Minibatch size for PPO updates')
@@ -414,7 +413,7 @@ if __name__ == "__main__":
                          action_dim=1,
                          mean_action_init=(1.0/env.budget)).to(device)
 
-    train_PPO(env, ppo_agent, 
+    train_PPO(env, ppo_agent, device, 
             num_epochs=args.num_epochs, 
             target_steps=args.target_steps, 
             minibatch_size=args.minibatch_size, 
@@ -422,6 +421,5 @@ if __name__ == "__main__":
             lr=args.lr, weight_decay=args.weight_decay,
             entropy_coef=args.entropy_coef,
             oob_coef=args.oob_coef,
-            std_penalty_coef=args.std_penalty_coef,
             denorm_fn=denorm_fn, 
             logs_path=logs_path, save_path=save_path)
