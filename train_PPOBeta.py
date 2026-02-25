@@ -401,8 +401,7 @@ if __name__ == "__main__":
         time_encoder_dims=args.time_encoder_dims,
         projection_dims=args.projection_dims,
         action_dim=1,
-        # mean_action_init=(1.0 / env.budget),
-        mean_action_init=0.5,
+        mean_action_init=(1.0 / env.budget),
         concentration_init=4.0
     ).to(device)
 

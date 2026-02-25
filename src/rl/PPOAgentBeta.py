@@ -47,6 +47,7 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 #   Guarantees κ − 2 ≥ 0.005 > 0, so α, β > 1 strictly.
 # ---------------------------------------------------------------------------
 
+KAPPA_MIN = 2.005
 
 class NeRFEmbedder(nn.Module):
     """
@@ -134,7 +135,7 @@ class PPOAgent(nn.Module):
         act_min: float = 0.0,
         act_max: float = 1.0,
         mean_action_init: float = 0.5,
-        concentration_init: float = 2.1,
+        concentration_init: float = 4.0,
     ):
         super(PPOAgent, self).__init__()
 
@@ -147,8 +148,17 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        self.alpha_head = nn.Linear(backbone_dim, action_dim)
-        self.beta_head = nn.Linear(backbone_dim, action_dim)
+        self.mean_head = nn.Linear(backbone_dim, action_dim)
+        self.conc_head = nn.Linear(backbone_dim, action_dim)
+
+        mean_action_init = np.log(mean_action_init / (1 - mean_action_init))  # Inverse sigmoid to get initial raw_mean
+        conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
+        with torch.no_grad():
+            self.mean_head.bias.normal_(mean_action_init, 0.01)
+            self.mean_head.weight.normal_(0, 0.01)
+
+            self.conc_head.bias.normal_(conc_init, 0.01)
+            self.conc_head.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
@@ -163,14 +173,16 @@ class PPOAgent(nn.Module):
     # Helper: raw outputs → α, β
     # ------------------------------------------------------------------
     def _alpha_beta_params(self, combined: torch.Tensor):
-        raw_alpha = self.alpha_head(combined)
-        raw_beta  = self.beta_head(combined)
+        raw_mean = self.mean_head(combined)
+        raw_conc = self.conc_head(combined)
 
-        alpha = F.softplus(raw_alpha) + 1.0 + 1e-3  # ensure α > 1 + 1e-3
-        beta  = F.softplus(raw_beta)  + 1.0 + 1e-3  # ensure β > 1 + 1e-3
-        # alpha = torch.exp(raw_alpha) + 1.0 + 1e-3  # α > 1 + 1e-3
-        # beta  = torch.exp(raw_beta)  + 1.0 + 1e-3  # β > 1 + 1e-3
-        return alpha, beta, {'kappa': alpha + beta}
+        mu = torch.sigmoid(raw_mean)  # (0, 1)
+        kappa = F.softplus(raw_conc) + KAPPA_MIN  # > KAPPA_MIN
+
+        alpha = 1.0 + mu * (kappa - 2.0)
+        beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
+
+        return alpha, beta, {'kappa': kappa}
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
