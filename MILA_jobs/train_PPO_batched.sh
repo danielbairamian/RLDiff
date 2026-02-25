@@ -12,39 +12,39 @@ for DS in "${DATASETS[@]}"; do
             S_MULT=4
             B_SIZE=64
             MB_SIZE=256
-            T_STEPS=4096
+            T_STEPS=8192    
             F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 64 256"
+            TIME_ENC="64 256 512"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
-            LAT_CHAN="16 32 64 128"
+            LAT_CHAN="32 64 128 256"
             ;;
 
         "CIFAR10")
             S_MULT=4
             B_SIZE=64
             MB_SIZE=256
-            T_STEPS=4096
+            T_STEPS=8192
             F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 64 256"
+            TIME_ENC="64 256 512"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
-            LAT_CHAN="16 32 64 128"
+            LAT_CHAN="32 64 128 256"
             ;;
 
         "CelebAHQ")
             S_MULT=2
             B_SIZE=32
             MB_SIZE=256
-            T_STEPS=2048
+            T_STEPS=4096
             F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 64 256"
+            TIME_ENC="64 256 512"
             PROJ_DIMS="256 128 64"
             LAT_DIM=512
-            LAT_CHAN="8 16 32 64 128 256"
+            LAT_CHAN="16 32 64 128 256 512"
             ;;
         
     esac
