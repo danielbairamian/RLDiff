@@ -148,7 +148,7 @@ class PPOAgent(nn.Module):
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
-        self.mean_concentration_head = nn.Linear(backbone_dim, 2 * action_dim)
+        self.alpha_beta_head = nn.Linear(backbone_dim, 2 * action_dim)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
@@ -162,15 +162,11 @@ class PPOAgent(nn.Module):
     # ------------------------------------------------------------------
     # Helper: raw outputs → α, β
     # ------------------------------------------------------------------
-    def _concentration_params(self, combined: torch.Tensor):
-        raw_mean, raw_conc = self.mean_concentration_head(combined).chunk(2, dim=-1) 
-        mu = torch.sigmoid(raw_mean)              # mode ∈ (0, 1)
-        # kappa = torch.exp(raw_conc) + KAPPA_MIN  # log-space parameterization of concentration
-        kappa = F.softplus(raw_conc) + KAPPA_MIN  # log-space parameterization of concentration
-        excess = kappa - 2.0                        # ≥ KAPPA_MIN − 2 > 0
-        alpha = 1.0 + mu * excess
-        beta  = 1.0 + (1.0 - mu) * excess
-        return alpha, beta, {'kappa': kappa, 'mu': mu}
+    def _alpha_beta_params(self, combined: torch.Tensor):
+        raw_alpha, raw_beta = self.alpha_beta_head(combined).chunk(2, dim=-1) 
+        alpha = F.softplus(raw_alpha) + 1.0 + 1e-3  # ensure α > 1 + 1e-3
+        beta  = F.softplus(raw_beta)  + 1.0 + 1e-3  # ensure β > 1 + 1e-3
+        return alpha, beta, {'kappa': alpha + beta}
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
@@ -179,7 +175,7 @@ class PPOAgent(nn.Module):
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
 
-        conc_alpha, conc_beta, net_dict = self._concentration_params(combined)
+        conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         value = self.mc_layer.get_mean_only(combined)
 
@@ -207,7 +203,7 @@ class PPOAgent(nn.Module):
 
         combined = self.backbone(state_enc, alpha_t, steps)
 
-        conc_alpha, conc_beta, net_dict = self._concentration_params(combined)
+        conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         value = self.mc_layer.get_mean_only(combined)
 
