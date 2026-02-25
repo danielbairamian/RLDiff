@@ -21,7 +21,7 @@ class VisionEncoder(nn.Module):
             self.encoder_layers.append(
                 nn.Sequential(
                     nn.Conv2d(in_dim, out_dim, kernel_size=kernel_size, stride=stride, padding=padding),
-                    nn.Tanh(),
+                    nn.SiLU(),
                 )
             )
 
@@ -45,5 +45,5 @@ class VisionEncoder(nn.Module):
             x = layer(x)
         x = self.flatten(x)
         x = self.projection_layer(x)
-        x = F.tanh(x)
+        x = F.silu(x)
         return x

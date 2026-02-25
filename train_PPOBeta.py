@@ -242,9 +242,9 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
             for policy_loss, value_loss, entropy, kl, concentration_kappa in ppo_update(
                 ppo_agent, device, minibatch_size, full_rollout=rollout_buffer
             ):
-                concentration_kappa = torch.log(concentration_kappa + 1e-8)  # log-space penalty for stability
+                concentration_kappa = torch.log(concentration_kappa)  # log-space penalty for stability
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss + (entropy_coef * concentration_kappa)  # - entropy_coef * entropy
+                loss = policy_loss + value_loss + (entropy_coef * concentration_kappa) - entropy_coef * entropy
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -349,7 +349,7 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
     parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay',         type=float, default=1e-3,            help='Weight decay for optimizer')
+    parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef',         type=float, default=1e-4,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
