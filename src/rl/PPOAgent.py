@@ -110,7 +110,8 @@ class PPOAgent(nn.Module):
         
         # 2. State-Independent Log Std (Global Parameter)
         # Shape: (1, action_dim). Initialized to log_std_init.
-        log_std_init = np.log(std_init)
+        # log_std_init = np.log(std_init)
+        softplus_std_init = np.log(np.exp(std_init) - 1)  # Inverse of softplus to get the initial value before activation
 
         self.action_log_std = nn.Linear(self.backbone.backbone_out_dim, action_dim)
 
@@ -122,7 +123,7 @@ class PPOAgent(nn.Module):
         with torch.no_grad():
             self.action_mean.bias.normal_(mean_action_init, 0.01)
             self.action_mean.weight.normal_(0, 0.01)
-            self.action_log_std.bias.normal_(log_std_init, 0.01)
+            self.action_log_std.bias.normal_(softplus_std_init, 0.01)
             self.action_log_std.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(self.backbone.backbone_out_dim, 1)
@@ -145,7 +146,7 @@ class PPOAgent(nn.Module):
         action_log_std = self.action_log_std(combined)
         # action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
 
-        probs = Normal(action_mean, torch.exp(action_log_std))
+        probs = Normal(action_mean, F.softplus(action_log_std))
         value = self.mc_layer.get_mean_only(combined)
         
         if deterministic:
@@ -171,7 +172,7 @@ class PPOAgent(nn.Module):
         action_log_std = self.action_log_std(combined)
         # action_log_std = torch.clamp(action_log_std, LOG_MIN, LOG_MAX)  # Clamp for numerical stability
         
-        probs = Normal(action_mean, torch.exp(action_log_std))
+        probs = Normal(action_mean, F.softplus(action_log_std))
         value = self.mc_layer.get_mean_only(combined)
 
         # Standard Gaussian evaluation against the RAW unclipped actions
