@@ -165,7 +165,8 @@ class PPOAgent(nn.Module):
     def _concentration_params(self, combined: torch.Tensor):
         raw_mean, raw_conc = self.mean_concentration_head(combined).chunk(2, dim=-1) 
         mu = torch.sigmoid(raw_mean)              # mode ∈ (0, 1)
-        kappa = torch.exp(raw_conc) + KAPPA_MIN  # log-space parameterization of concentration
+        # kappa = torch.exp(raw_conc) + KAPPA_MIN  # log-space parameterization of concentration
+        kappa = F.softplus(raw_conc) + KAPPA_MIN  # log-space parameterization of concentration
         excess = kappa - 2.0                        # ≥ KAPPA_MIN − 2 > 0
         alpha = 1.0 + mu * excess
         beta  = 1.0 + (1.0 - mu) * excess
