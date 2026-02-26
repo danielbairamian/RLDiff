@@ -48,6 +48,8 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 # ---------------------------------------------------------------------------
 
 KAPPA_MIN = 2.005
+RAW_MEAN_MIN = -6.0 
+RAW_MEAN_MAX = 6.0
 
 class NeRFEmbedder(nn.Module):
     """
@@ -172,17 +174,24 @@ class PPOAgent(nn.Module):
     # ------------------------------------------------------------------
     # Helper: raw outputs → α, β
     # ------------------------------------------------------------------
+    
     def _alpha_beta_params(self, combined: torch.Tensor):
         raw_mean = self.mean_head(combined)
         raw_conc = self.conc_head(combined)
 
-        mu = torch.sigmoid(raw_mean)  # (0, 1)
-        kappa = F.softplus(raw_conc) + KAPPA_MIN  # > KAPPA_MIN
+        # STE clamp on raw_mean — forward sees bounded value, backward gradient = 1
+        # When raw_mean = -100: forward uses -5.0, backward gets full gradient back
+        # This is the key difference vs clamping mu: d(clamp)/d(raw_mean) = 1 straight-through
+        # vs d(sigmoid_clamp)/d(raw_mean) = sigmoid_grad ≈ 0 when saturated
+        raw_mean_clamped = raw_mean + (raw_mean.clamp(RAW_MEAN_MIN, RAW_MEAN_MAX) - raw_mean).detach()
+        mu = torch.sigmoid(raw_mean_clamped)
+
+        kappa = F.softplus(raw_conc) + KAPPA_MIN
 
         alpha = 1.0 + mu * (kappa - 2.0)
         beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
 
-        return alpha, beta, {'kappa': kappa}
+        return alpha, beta, {'kappa': kappa, 'mu': mu}
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
@@ -196,9 +205,8 @@ class PPOAgent(nn.Module):
         value = self.mc_layer.get_mean_only(combined)
 
         if deterministic:
-            # Mode = (α-1)/(α+β-2) — always valid since α,β > 1
-            # action = (conc_alpha - 1.0) / (conc_alpha + conc_beta - 2.0)
             action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            # action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
         else:
             action = dist.sample()
 
