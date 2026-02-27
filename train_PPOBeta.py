@@ -153,7 +153,7 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
 
     full_rollout['advantages'] = (
         (full_rollout['advantages'] - full_rollout['advantages'].mean())
-        / (full_rollout['advantages'].std() + 1e-2)
+        / (full_rollout['advantages'].std() + 1.0) # add 1.0 to std for stability and to prevent overfitting to small advantage magnitudes early on
     )
     return full_rollout, debug_dict
 
