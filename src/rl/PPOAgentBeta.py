@@ -96,7 +96,7 @@ class Backbone_Encoder(nn.Module):
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
         self.projection_encoder = nn.Sequential()
-        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 # + self.nerf_embedder.out_dim_per_scalar * 2
+        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
         for i in range(len(projection_dims)):
             output_dim = projection_dims[i]
             self.projection_encoder.append(
@@ -117,9 +117,9 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
-        # nerf_embeddings = self.nerf_embedder(time_inputs)
-        # combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
-        combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
+        nerf_embeddings = self.nerf_embedder(time_inputs)
+
+        combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
 
         for layer in self.projection_encoder:
             combined = layer(combined)
