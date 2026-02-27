@@ -16,7 +16,7 @@ from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
-PPO_EPSILON = 0.2
+PPO_EPSILON = 0.1
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False):
@@ -153,7 +153,7 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
 
     full_rollout['advantages'] = (
         (full_rollout['advantages'] - full_rollout['advantages'].mean())
-        / (full_rollout['advantages'].std() + 1e-6)
+        / (full_rollout['advantages'].std() + 1e-2)
     )
     return full_rollout, debug_dict
 
@@ -348,9 +348,9 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
+    parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
+    parser.add_argument('--weight_decay',         type=float, default=1e-3,            help='Weight decay for optimizer')
+    parser.add_argument('--entropy_coef',         type=float, default=1e-3,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs',       type=int,   default=4,               help='PPO epochs per update')

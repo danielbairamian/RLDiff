@@ -191,7 +191,7 @@ class PPOAgent(nn.Module):
         alpha = 1.0 + mu * (kappa - 2.0)
         beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
 
-        return alpha, beta, {'kappa': kappa, 'mu': mu}
+        return alpha, beta, {'kappa': raw_conc, 'mu': mu}
 
     # ------------------------------------------------------------------
     # forward  (used during rollout collection)
