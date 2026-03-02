@@ -7,7 +7,7 @@ import argparse
 from utils.dataloaders import CIFAR_dataloader, CelebAHQ_dataloader, MNIST_dataloader, FID_dataloader
 from tqdm import tqdm
 
-def calculate_fid(real_dataloader, fake_dataloader, device='cuda', feature=2048):
+def calculate_fid(real_dataloader, fake_dataloader, denorm_fn=None, device='cuda', feature=2048):
     
     inception_preprocess = T.Compose([
         T.Resize((299, 299), antialias=True),
@@ -25,6 +25,8 @@ def calculate_fid(real_dataloader, fake_dataloader, device='cuda', feature=2048)
         return inception_preprocess(imgs)
 
     for batch in tqdm(real_dataloader, desc="Processing real images"):
+        batch[0] = denorm_fn(batch[0])  # Denormalize the batch before feeding to FID 
+        batch[0] = torch.clamp(batch[0], 0, 1)  # Ensure the pixel values are in the valid range [0, 1] 
         fid.update(prepare(batch), real=True)
 
     for batch in tqdm(fake_dataloader, desc="Processing fake images"):
@@ -65,10 +67,10 @@ if __name__ == "__main__":
     data_log_suffix  = f"{args.dataset}_NFE_{args.budget}_order{args.order}_schedule_{args.schedule}"
     data_save_path   = args.base_FID_dataset_path + f"{data_log_suffix}/"
 
-    real_dataloader, _, _ = load_fn(dataset_path, batch_size=args.batch_size, train=True, drop_last=False)
+    real_dataloader, info_dict, denorm_fn= load_fn(dataset_path, batch_size=args.batch_size, train=True, drop_last=False)
     fake_dataloader = FID_dataloader(data_save_path, batch_size=args.batch_size)
 
     print("Calculating FID...")
 
-    fid_score = calculate_fid(real_dataloader, fake_dataloader, device=device)
+    fid_score = calculate_fid(real_dataloader, fake_dataloader, denorm_fn=denorm_fn, device=device)
     print(f"FID Score: {fid_score}")
