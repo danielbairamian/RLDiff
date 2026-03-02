@@ -2,6 +2,13 @@ import torch
 import torchvision.transforms as transforms
 from torchvision.datasets import MNIST, CIFAR10
 from utils.CelebAHQ import CelebAHQ
+from utils.FIDDataset import FIDDataset
+
+from torch.utils.data import Dataset
+from torchvision import transforms
+from PIL import Image
+import glob
+import os
 
 def get_denorm_fn(mean, std):
     """Generates a denormalization function for a specific mean and std."""
@@ -57,3 +64,14 @@ def CelebAHQ_dataloader(dataset_path, batch_size, num_workers=4, shuffle=True, d
     denorm_fn = get_denorm_fn(mean, std)
     info_dict = {"H":256, "W": 256, "C":3}
     return dataloader, info_dict, denorm_fn
+
+
+def FID_dataloader(folder_path, batch_size, num_workers=4, shuffle=False, drop_last=False):
+    dataset = FIDDataset(folder_path)
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+    dataset = FIDDataset(folder_path, transform=transform, return_labels=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, drop_last=drop_last, pin_memory=True)
+    return dataloader

@@ -5,7 +5,7 @@ import torchvision.transforms as T
 import torchvision.models as models
 
 class DiffusionEnv:
-    def __init__(self, dataloader, iadb_model, device, order=1, budget=10, sample_multiplier=4, denorm_fn=None):
+    def __init__(self, dataloader, iadb_model, device, order=1, budget=10, sample_multiplier=4, denorm_fn=None, eval_mode=False):
         self.dataloader = dataloader
         self.iadb_model = iadb_model
         
@@ -15,6 +15,7 @@ class DiffusionEnv:
         self.order = order
         self.budget = budget // self.order
         self.sample_multiplier = sample_multiplier 
+        self.eval_mode = eval_mode # eval mode to disable rewards and just get trajectories
         
         # --- 2. THE GOLD-STANDARD REWARD (InceptionV3) ---
         print("Loading InceptionV3 (Official FID Feature Space)...")
@@ -74,7 +75,7 @@ class DiffusionEnv:
         # Who just crossed the finish line exactly on this step?
         just_done = self.dones & ~old_dones
 
-        if just_done.any():
+        if just_done.any() and not self.eval_mode:
             # Run Inception ONLY on the agents that just finished
             x0_finished = self.x0[just_done]
             z_gen_inception = self.get_inception_features(x0_finished)
@@ -107,8 +108,11 @@ class DiffusionEnv:
         self.x1 = x1.to(self.device)
         
         # Pre-compute and normalize real Inception features ONCE per batch
-        x1_inception = self.get_inception_features(self.x1)
-        self.z_real_norm = F.normalize(x1_inception, p=2.0, dim=1)
+        if not self.eval_mode:
+            x1_inception = self.get_inception_features(self.x1)
+            self.z_real_norm = F.normalize(x1_inception, p=2.0, dim=1)
+        else:
+            self.z_real_norm = None  # No rewards in eval mode, so no need to compute or store this
         
         self.k = 1 # max(1, int(0.01 * self.x1.shape[0]))
 

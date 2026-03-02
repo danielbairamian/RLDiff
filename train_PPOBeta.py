@@ -340,7 +340,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--dataset',              type=str,   default='CIFAR10',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
     parser.add_argument('--batch_size',           type=int,   default=4,               help='Batch size for training')
-    parser.add_argument('--budget',               type=int,   default=100,             help='Maximum number of steps per episode')
+    parser.add_argument('--budget',               type=int,   default=10,             help='Maximum number of steps per episode')
     parser.add_argument('--base_dataset_path',    type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
     parser.add_argument('--base_logs_path',       type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/IADB/',   help='Base path for logs and checkpoints')
     parser.add_argument('--base_path_diffusion',  type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/IADB/', help='Base path for diffusion checkpoints')
