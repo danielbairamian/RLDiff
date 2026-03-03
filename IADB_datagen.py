@@ -80,6 +80,8 @@ if __name__ == "__main__":
     parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
     parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
     parser.add_argument('--start_idx_offset',           type=int,   default=1,               help='Starting index offset for resuming generation to avoid corrupted images' )
+    parser.add_argument('--seed',                       type=int,   default=42,              help='Random seed for reproducibility' )
+
     args = parser.parse_args()
 
 
@@ -118,7 +120,10 @@ if __name__ == "__main__":
         order=args.order, budget=args.budget,
         sample_multiplier=1, denorm_fn=denorm_fn, eval_mode=True
     )
+    
+    torch.manual_seed(args.seed)
     env.reset()
+
 
     ppo_agent = PPOAgent(
         vision_encoder=vision_encoder,
