@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define the grids for the loops
-DATASETS=("CIFAR10" "MNIST" "CelebAHQ")
+DATASETS=("CIFAR10" "MNIST") # "CelebAHQ")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 
@@ -13,7 +13,7 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=8192    
-            F_DIMS=64
+            F_DIMS=256
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
             PROJ_DIMS="256 128 64"
@@ -26,7 +26,7 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=8192
-            F_DIMS=64
+            F_DIMS=256
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
             PROJ_DIMS="256 128 64"
@@ -39,7 +39,7 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=32
             MB_SIZE=256
             T_STEPS=4096
-            F_DIMS=64
+            F_DIMS=256
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
             PROJ_DIMS="256 128 64"
