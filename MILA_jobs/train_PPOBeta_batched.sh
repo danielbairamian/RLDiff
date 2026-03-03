@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define the grids for the loops
-DATASETS=("CIFAR10" "MNIST" "CelebAHQ")
+DATASETS=("CIFAR10" "MNIST") # "CelebAHQ")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 
