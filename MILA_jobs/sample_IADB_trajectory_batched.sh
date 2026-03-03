@@ -43,7 +43,7 @@ for DS in "${DATASETS[@]}"; do
             for SCHED in "${SCHEDULES[@]}"; do
                 
                 # Updated Job Name to include Schedule (e.g., GEN_MNIST_O1_B10_RL)
-                JOB_NAME="GEN_${DS}_O${ORD}_B${BUD}_${SCHED}"
+                JOB_NAME="STATS_${DS}_O${ORD}_B${BUD}_${SCHED}"
                 
                 sbatch <<EOF
 #!/bin/bash
