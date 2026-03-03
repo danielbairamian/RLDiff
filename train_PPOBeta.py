@@ -19,7 +19,7 @@ GAE_LAMBDA = 1.0
 PPO_EPSILON = 0.1
 
 @torch.no_grad()
-def generate_rollout(env, ppo_agent, deterministic=False):
+def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=False):
 
     obs = env.reset()
     T = env.budget
@@ -131,6 +131,10 @@ def generate_rollout(env, ppo_agent, deterministic=False):
         'episode_lengths':  episode_lengths,       # CPU
         'final_alphas':     final_alphas,          # CPU
     }
+
+    if return_trajectory:
+        debug_dict['states'] = b_states
+        debug_dict['alphas'] = b_alphas
 
     return rollout, debug_dict
 
