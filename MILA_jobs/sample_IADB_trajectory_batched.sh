@@ -61,7 +61,7 @@ module --quiet load anaconda/3
 conda activate RLDiff 
 
 # Launch data generation script
-python /home/mila/d/daniel.bairamian/RLDiff/IADB_datagen.py \\
+python /home/mila/d/daniel.bairamian/RLDiff/IADB_statsgen.py \\
     --dataset "$DS" \\
     --batch_size $B_SIZE \\
     --budget "$BUD" \\
@@ -73,7 +73,7 @@ python /home/mila/d/daniel.bairamian/RLDiff/IADB_datagen.py \\
     --latent_dim $LAT_DIM \\
     --latent_channels $LAT_CHAN \\
     --base_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets/ \\
-    --base_FID_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets_FID/ \\
+    --base_FID_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets_FID_trajectories/ \\
     --base_logs_path /network/scratch/d/daniel.bairamian/RLDiff_data/logs/PPO/IADB/ \\
     --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/IADB/
 EOF

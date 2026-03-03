@@ -149,7 +149,8 @@ if __name__ == "__main__":
     print(ppo_agent)
 
 
-    num_trajectories = 256
+    num_trajectories = 1024
+    num_saved_image_trajectories = 64
 
     pbar = tqdm(total=num_trajectories, desc="Generating IADB statistics")
     current_idx = 1
@@ -203,6 +204,7 @@ if __name__ == "__main__":
             pbar.update(new_states.shape[1])  # Update progress bar by the batch size of new states
     
     # Save the final concatenated trajectories
+    states = states[:, :num_saved_image_trajectories, ...]  # Keep only the first N trajectories for images
     torch.save({'states': states, 'alphas': alphas}, os.path.join(data_save_path, 'iadb_trajectories.pth'))
     print(f"Saved {num_trajectories} trajectories to {os.path.join(data_save_path, 'iadb_trajectories.pth')}")
     print(f"Final states shape: {states.shape}, Final alphas shape: {alphas.shape}")
