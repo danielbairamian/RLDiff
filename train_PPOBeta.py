@@ -16,7 +16,7 @@ from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
-PPO_EPSILON = 0.1
+PPO_EPSILON = 0.15
 KL_TERMINATION_THRESHOLD = 1.0  # KL divergence threshold for early stopping of PPO updates
 
 @torch.no_grad()
@@ -156,10 +156,16 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
         for key in rollout_chunks[0].keys()
     }
 
+    # full_rollout['advantages'] = (
+    #     (full_rollout['advantages'] - full_rollout['advantages'].mean())
+    #     / (full_rollout['advantages'].std() + 1e-6) # add 1.0 to std for stability and to prevent overfitting to small advantage magnitudes early on
+    # )
+
     full_rollout['advantages'] = (
-        (full_rollout['advantages'] - full_rollout['advantages'].mean())
-        / (full_rollout['advantages'].std() + 1.0) # add 1.0 to std for stability and to prevent overfitting to small advantage magnitudes early on
+        (full_rollout['advantages'] - full_rollout['advantages'].mean()) # center advantages to zero mean for better optimization stability, ommit std normalization since agent can control advantage scale via concentration parameters
     )
+
+
     return full_rollout, debug_dict
 
 
@@ -363,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
+    parser.add_argument('--lr',                   type=float, default=3e-5,            help='Learning rate for optimizer')
     parser.add_argument('--weight_decay',         type=float, default=1e-5,            help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
@@ -417,7 +423,7 @@ if __name__ == "__main__":
         projection_dims=args.projection_dims,
         action_dim=1,
         mean_action_init=(1.0 / env.budget),
-        concentration_init=4.0
+        concentration_init=8.0
     ).to(device)
 
     train_PPO(

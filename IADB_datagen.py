@@ -76,7 +76,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate IADB dataset")
     
     parser.add_argument('--dataset',                    type=str,   default='CIFAR10',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
-    parser.add_argument('--batch_size',                 type=int,   default=4,               help='Batch size for training')
+    parser.add_argument('--batch_size',                 type=int,   default=16,               help='Batch size for training')
     parser.add_argument('--budget',                     type=int,   default=10,             help='Maximum number of steps per episode')
     parser.add_argument('--base_dataset_path',          type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
     parser.add_argument('--base_FID_dataset_path',      type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets_FID/',        help='Base path for datasets')
