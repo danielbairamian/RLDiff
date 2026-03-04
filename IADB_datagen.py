@@ -34,26 +34,36 @@ def sampling_strategy(iadb_model, nb_step, order, schedule="linear", ppo_agent=N
     if schedule == "linear":
         env.reset()
         if order == 1:
-            x1 = sample_iadb_linear_first_order(iadb_model, env.x0, nb_step)
-            return x1
+            x1, trajectory_dict = sample_iadb_linear_first_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            return x1, trajectory_dict
         elif order == 2:
-            x1 = sample_iadb_linear_second_order(iadb_model, env.x0, nb_step)
-            return x1
+            x1, trajectory_dict = sample_iadb_linear_second_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            return x1, trajectory_dict
     elif schedule == "cosine":
         env.reset()
         if order == 1:
-            x1 = sample_iadb_cosine_first_order(iadb_model, env.x0, nb_step)
-            return x1
+            x1, trajectory_dict = sample_iadb_cosine_first_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            return x1, trajectory_dict
         elif order == 2:
-            x1 = sample_iadb_cosine_second_order(iadb_model, env.x0, nb_step)
-            return x1
+            x1, trajectory_dict = sample_iadb_cosine_second_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            return x1, trajectory_dict
     elif schedule == "RL":
         if ppo_agent is None or env is None:
             raise ValueError("PPO agent and environment must be provided for RL-based sampling")
         # no need to call env.reset(), generate_rollout calls it
-        _, debug_dict = generate_rollout(env, ppo_agent, deterministic=False)
+        _, debug_dict = generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=True)
+        states = debug_dict['states']  # shape (T, B, C, H, W)
+        final_states = debug_dict['final_x0s']  # shape (B, C, H, W)
+        states = torch.cat((states, final_states.unsqueeze(0)), dim=0)  # shape (T+1, B, C, H, W)
+
+        alphas = debug_dict['alphas']  # shape (T, B)
+        final_alphas = debug_dict['final_alphas']  # shape (B,)
+        alphas = torch.cat((alphas, final_alphas.unsqueeze(0)), dim=0)  # shape (T+1, B)
+
         x1 = debug_dict['final_x0s']
-        return x1   
+        trajectory_dict = {"states": states.cpu(), "alphas": alphas.cpu()}
+
+        return x1, trajectory_dict
     else:
         raise ValueError("Unsupported schedule type. Choose from: linear, cosine, RL")
 
@@ -98,12 +108,14 @@ if __name__ == "__main__":
     ppo_exp_suffix   = f"{args.dataset}_NFE_{args.budget}_order_{args.order}"
     data_log_suffix  = f"{args.dataset}_NFE_{args.budget}_order{args.order}_schedule_{args.schedule}"
     
-    data_save_path   = args.base_FID_dataset_path + f"{data_log_suffix}/"
+    data_save_path   = args.base_FID_dataset_path + f"FID_Images/{data_log_suffix}/"
+    traj_save_path   = args.base_FID_dataset_path + f"FID_Trajectories/{data_log_suffix}/"
     diffusion_path   = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
     
     ppo_save_path    = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}/"
 
     os.makedirs(data_save_path, exist_ok=True)
+    os.makedirs(traj_save_path, exist_ok=True)
 
     iadb_model = torch.load(os.path.join(diffusion_path, 'iadb_model.pth'), map_location=device).eval()
 
@@ -150,6 +162,7 @@ if __name__ == "__main__":
 
     TOTAL_SAMPLES = 50_000
     IMAGE_EXT = '.png'
+    FIRST_TRAJ = True
 
     start_idx = get_last_index(data_save_path)
     start_idx = max(0, start_idx - args.start_idx_offset)  # Apply offset to avoid corrupted images
@@ -161,7 +174,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         while current_idx < TOTAL_SAMPLES:
             # x1 = sample_iadb_linear_first_order(iadb_model, x0, nb_step=args.budget)
-            x1 = sampling_strategy(iadb_model, nb_step=args.budget, order=args.order, schedule=args.schedule, ppo_agent=ppo_agent, env=env)
+            x1, trajectory_dict = sampling_strategy(iadb_model, nb_step=args.budget, order=args.order, schedule=args.schedule, ppo_agent=ppo_agent, env=env)
             x1 = denorm_fn(x1)
             x1 = torch.clamp(x1, 0, 1)  # Ensure pixel values are in [0, 1]
             for i in range(x1.shape[0]):
@@ -172,3 +185,19 @@ if __name__ == "__main__":
                 img_path = os.path.join(data_save_path, img_filename)
                 vutils.save_image(x1[i], img_path)
                 pbar.update(1)
+            
+            if FIRST_TRAJ:
+                states = trajectory_dict['states']  # shape (T+1, B, C, H, W)
+                alphas = trajectory_dict['alphas']    # shape (T+1, B)
+
+                # denormalize states for saving
+                T = states.shape[0]
+                for t in range(T):
+                    states[t] = denorm_fn(states[t])
+                    states[t] = torch.clamp(states[t], 0, 1)  # Ensure pixel values are in [0, 1]   
+
+                FIRST_TRAJ = False
+                torch.save({'states': states, 'alphas': alphas}, os.path.join(traj_save_path, 'iadb_trajectories.pth'))
+                print(f"Saved first trajectory with {states.shape[1]} states to {os.path.join(traj_save_path, 'iadb_trajectories.pth')}")
+                print(f"States shape: {states.shape}, Alphas shape: {alphas.shape}")
+                print(f"Example state pixel range: {states.min().item()} to {states.max().item()}")

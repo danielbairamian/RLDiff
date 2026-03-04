@@ -65,7 +65,7 @@ if __name__ == "__main__":
 
     dataset_path     = args.base_dataset_path + args.dataset
     data_log_suffix  = f"{args.dataset}_NFE_{args.budget}_order{args.order}_schedule_{args.schedule}"
-    data_save_path   = args.base_FID_dataset_path + f"{data_log_suffix}/"
+    data_save_path   = args.base_FID_dataset_path + f"FID_Images/{data_log_suffix}/"
 
     real_dataloader, info_dict, denorm_fn= load_fn(dataset_path, batch_size=args.batch_size, train=True, drop_last=False)
     fake_dataloader = FID_dataloader(data_save_path, batch_size=args.batch_size)
