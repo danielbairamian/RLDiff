@@ -16,7 +16,7 @@ for DS in "${DATASETS[@]}"; do
             F_DIMS=256
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
-            PROJ_DIMS="256 128 64"
+            PROJ_DIMS="512 256 128"
             LAT_DIM=512
             LAT_CHAN="32 64 128 256"
             ;;
@@ -29,7 +29,7 @@ for DS in "${DATASETS[@]}"; do
             F_DIMS=256
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
-            PROJ_DIMS="256 128 64"
+            PROJ_DIMS="512 256 128"
             LAT_DIM=512
             LAT_CHAN="32 64 128 256"
             ;;
@@ -42,7 +42,7 @@ for DS in "${DATASETS[@]}"; do
             F_DIMS=256
             N_EPOCHS=2000
             TIME_ENC="64 256 512"
-            PROJ_DIMS="256 128 64"
+            PROJ_DIMS="512 256 128"
             LAT_DIM=512
             LAT_CHAN="16 32 64 128 256 512"
             ;;

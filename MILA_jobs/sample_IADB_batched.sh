@@ -12,27 +12,27 @@ for DS in "${DATASETS[@]}"; do
     case $DS in
         "MNIST")
             B_SIZE=128
-            F_DIMS=64
+            F_DIMS=256
             TIME_ENC="64 256 512"
-            PROJ_DIMS="256 128 64"
+            PROJ_DIMS="512 256 128"
             LAT_DIM=512
             LAT_CHAN="32 64 128 256"
             ;;
 
         "CIFAR10")
             B_SIZE=128
-            F_DIMS=64
+            F_DIMS=256
             TIME_ENC="64 256 512"
-            PROJ_DIMS="256 128 64"
+            PROJ_DIMS="512 256 128"
             LAT_DIM=512
             LAT_CHAN="32 64 128 256"
             ;;
 
         "CelebAHQ")
             B_SIZE=32
-            F_DIMS=64
+            F_DIMS=256
             TIME_ENC="64 256 512"
-            PROJ_DIMS="256 128 64"
+            PROJ_DIMS="512 256 128"
             LAT_DIM=512
             LAT_CHAN="16 32 64 128 256 512"
             ;;
