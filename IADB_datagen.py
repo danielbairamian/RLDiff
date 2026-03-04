@@ -162,10 +162,12 @@ if __name__ == "__main__":
 
     TOTAL_SAMPLES = 50_000
     IMAGE_EXT = '.png'
-    FIRST_TRAJ = True
+
 
     start_idx = get_last_index(data_save_path)
     start_idx = max(0, start_idx - args.start_idx_offset)  # Apply offset to avoid corrupted images
+    
+    FIRST_TRAJ = start_idx == 0  # Only save the first trajectory if we're starting from the beginning
 
     print(f"Starting data generation from index {start_idx} (with offset {args.start_idx_offset}) to {TOTAL_SAMPLES}")
 

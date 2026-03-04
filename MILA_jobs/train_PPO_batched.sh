@@ -13,12 +13,12 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=8192    
-            F_DIMS=256
+            F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="64 256 512"
+            TIME_ENC="64 256"
             PROJ_DIMS="512 256 128"
-            LAT_DIM=512
-            LAT_CHAN="32 64 128 256"
+            LAT_DIM=256
+            LAT_CHAN="16 32 64 128"
             ;;
 
         "CIFAR10")
@@ -26,12 +26,12 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=8192
-            F_DIMS=256
+            F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="64 256 512"
+            TIME_ENC="64 256"
             PROJ_DIMS="512 256 128"
-            LAT_DIM=512
-            LAT_CHAN="32 64 128 256"
+            LAT_DIM=256
+            LAT_CHAN="16 32 64 128"
             ;;
 
         "CelebAHQ")
@@ -39,12 +39,12 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=32
             MB_SIZE=256
             T_STEPS=4096
-            F_DIMS=256
+            F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="64 256 512"
+            TIME_ENC="64 256"
             PROJ_DIMS="512 256 128"
-            LAT_DIM=512
-            LAT_CHAN="16 32 64 128 256 512"
+            LAT_DIM=256
+            LAT_CHAN="8 16 32 64 128 256"
             ;;
         
     esac

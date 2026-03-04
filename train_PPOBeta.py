@@ -17,6 +17,7 @@ from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
 PPO_EPSILON = 0.1
+KL_TERMINATION_THRESHOLD = 1.0  # KL divergence threshold for early stopping of PPO updates
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=False):
@@ -236,6 +237,8 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
         epoch_kappa       = 0.0
         update_count      = 0
 
+        KL_terminated = False
+
         rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
 
         for k in range(num_ppo_epochs):
@@ -260,6 +263,14 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
                 epoch_total_loss  += (loss.item()        - epoch_total_loss)  / update_count
                 epoch_kl          += (kl.item()          - epoch_kl)          / update_count
                 epoch_kappa       += (concentration_kappa.item() - epoch_kappa) / update_count  
+
+                # early stopping if KL divergence is too high, to prevent destructive updates
+                if torch.abs(kl).item() > KL_TERMINATION_THRESHOLD:
+                    KL_terminated = True    
+                    break
+            if KL_terminated:
+                break
+
         test_rollout, debug_dict_test = None, None
         if epoch % 20 == 0:
             test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
