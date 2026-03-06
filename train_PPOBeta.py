@@ -16,7 +16,7 @@ from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
-PPO_EPSILON = 0.15
+PPO_EPSILON = 0.1
 KL_TERMINATION_THRESHOLD = 0.1  # KL divergence threshold for early stopping of PPO updates
 
 @torch.no_grad()
@@ -267,12 +267,12 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
                 epoch_kl          += (kl.item()          - epoch_kl)          / update_count
                 epoch_kappa       += (concentration_kappa.item() - epoch_kappa) / update_count  
 
-                # early stopping if KL divergence is too high, to prevent destructive updates
-                if kl.item() > KL_TERMINATION_THRESHOLD:
-                    KL_terminated = True    
-                    break
-            if KL_terminated:
-                break
+            #     # early stopping if KL divergence is too high, to prevent destructive updates
+            #     if kl.item() > KL_TERMINATION_THRESHOLD:
+            #         KL_terminated = True    
+            #         break
+            # if KL_terminated:
+            #     break
 
         test_rollout, debug_dict_test = None, None
         if epoch % 100 == 0:
@@ -369,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
     parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
     parser.add_argument('--weight_decay',         type=float, default=1e-5,            help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef',         type=float, default=1e-5,             help='Entropy coefficient for PPO')
+    parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs',       type=int,   default=4,               help='PPO epochs per update')
