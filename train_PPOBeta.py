@@ -367,8 +367,8 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay',         type=float, default=1e-5,            help='Weight decay for optimizer')
+    parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
+    parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
@@ -377,6 +377,7 @@ if __name__ == "__main__":
     parser.add_argument('--order',                type=int,   default=1,               help='Order of the method (1=linear, 2=cosine)')
     parser.add_argument('--latent_dim',           type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',      type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
+    parser.add_argument('--feature_extractor',    type=str,   default="DINO",          help='Feature extractor to use: IV3, DINO')
     args = parser.parse_args()
 
     if args.dataset == "CIFAR10":
@@ -389,8 +390,7 @@ if __name__ == "__main__":
         raise ValueError("Unsupported dataset. Choose from: CIFAR10, MNIST, CelebAHQ")
 
     dataset_path   = args.base_dataset_path + args.dataset
-    ppo_exp_suffix = f"{args.dataset}_NFE_{args.budget}_order_{args.order}"
-
+    ppo_exp_suffix = f"{args.dataset}_NFE_{args.budget}_order_{args.order}_{args.feature_extractor}"
     logs_path      = args.base_logs_path + f"tensorboard/{ppo_exp_suffix}/"
     save_path      = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}/"
     diffusion_path = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
@@ -409,7 +409,7 @@ if __name__ == "__main__":
     env = DiffusionEnv(
         dataloader=dataloader, iadb_model=iadb_model, device=device,
         order=args.order, budget=args.budget,
-        sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn
+        sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn, feature_extractor=args.feature_extractor
     )
     env.reset()
 
