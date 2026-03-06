@@ -48,8 +48,8 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 # ---------------------------------------------------------------------------
 
 KAPPA_MIN = 2.005
-RAW_MEAN_MIN = -6.0 
-RAW_MEAN_MAX = 6.0
+RAW_MEAN_MIN = -10.0 
+RAW_MEAN_MAX = 10.0
 
 class NeRFEmbedder(nn.Module):
     """
@@ -96,7 +96,7 @@ class Backbone_Encoder(nn.Module):
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
         self.projection_encoder = nn.Sequential()
-        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
+        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 # + self.nerf_embedder.out_dim_per_scalar * 2
         for i in range(len(projection_dims)):
             output_dim = projection_dims[i]
             self.projection_encoder.append(
@@ -117,9 +117,9 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
-        nerf_embeddings = self.nerf_embedder(time_inputs)
-
-        combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
+        # nerf_embeddings = self.nerf_embedder(time_inputs)
+        # combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
+        combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
 
         for layer in self.projection_encoder:
             combined = layer(combined)
@@ -150,6 +150,7 @@ class PPOAgent(nn.Module):
 
         self.vision_encoder = vision_encoder
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
+        self.backbone_v = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
         self.mean_head = nn.Linear(backbone_dim, action_dim)
@@ -158,20 +159,20 @@ class PPOAgent(nn.Module):
         mean_action_init = np.log(mean_action_init / (1 - mean_action_init))  # Inverse sigmoid to get initial raw_mean
         conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
-            self.mean_head.bias.normal_(mean_action_init, 0.01)
-            self.mean_head.weight.normal_(0, 0.01)
+            self.mean_head.bias.normal_(mean_action_init, 0.1)
+            self.mean_head.weight.normal_(0, 0.1)
 
-            self.conc_head.bias.normal_(conc_init, 0.01)
-            self.conc_head.weight.normal_(0, 0.01)
+            self.conc_head.bias.normal_(conc_init, 0.1)
+            self.conc_head.weight.normal_(0, 0.1)
 
         self.critic = nn.Linear(backbone_dim, 1)
-        self.mc_layer = MonteCarloLayer(
-            self.critic,
-            dropout_p=0.05, mc_samples=256,
-            attention_mode='attention', attend_mode='inputs',
-            num_heads=8, embedding_size=backbone_dim // 2,
-            query_mode='per_sample',
-        )
+        # self.mc_layer = MonteCarloLayer(
+        #     self.critic,
+        #     dropout_p=0.05, mc_samples=256,
+        #     attention_mode='attention', attend_mode='inputs',
+        #     num_heads=8, embedding_size=backbone_dim // 2,
+        #     query_mode='per_sample',
+        # )
 
     # ------------------------------------------------------------------
     # Helper: raw outputs → α, β
@@ -189,6 +190,7 @@ class PPOAgent(nn.Module):
         mu = torch.sigmoid(raw_mean_clamped)
 
         kappa = F.softplus(raw_conc) + KAPPA_MIN
+        # kappa = torch.exp(raw_conc) + KAPPA_MIN
 
         alpha = 1.0 + mu * (kappa - 2.0)
         beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
@@ -201,10 +203,12 @@ class PPOAgent(nn.Module):
     def forward(self, state, alpha_t, steps, deterministic=False):
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
+        combined_v = self.backbone_v(state_enc, alpha_t, steps)
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        value = self.mc_layer.get_mean_only(combined)
+        # value = self.mc_layer.get_mean_only(combined_v)
+        value = self.critic(combined_v)
 
         if deterministic:
             action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
@@ -228,10 +232,12 @@ class PPOAgent(nn.Module):
         actions = actions.clamp(1e-6, 1.0 - 1e-6)
 
         combined = self.backbone(state_enc, alpha_t, steps)
+        combined_v = self.backbone_v(state_enc, alpha_t, steps)
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        value = self.mc_layer.get_mean_only(combined)
+        # value = self.mc_layer.get_mean_only(combined_v)
+        value = self.critic(combined_v)
 
         log_prob = dist.log_prob(actions).sum(dim=-1)
         entropy  = dist.entropy().sum(dim=-1)
