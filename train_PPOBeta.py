@@ -17,7 +17,7 @@ from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 GAMMA = 1.0
 GAE_LAMBDA = 1.0
 PPO_EPSILON = 0.1
-KL_TERMINATION_THRESHOLD = 0.5  # KL divergence threshold for early stopping of PPO updates
+KL_TERMINATION_THRESHOLD = 0.1  # KL divergence threshold for early stopping of PPO updates
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=False):
@@ -156,10 +156,10 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
         for key in rollout_chunks[0].keys()
     }
 
-    full_rollout['advantages'] = (
-        (full_rollout['advantages'] - full_rollout['advantages'].mean())
-        / (full_rollout['advantages'].std() + 1e-4)
-    )
+    # full_rollout['advantages'] = (
+    #     (full_rollout['advantages'] - full_rollout['advantages'].mean())
+    #     / (full_rollout['advantages'].std() + 1e-4)
+    # )
 
 
     return full_rollout, debug_dict
@@ -181,6 +181,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
             minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions']
         )
         kl        = new_logprobs - minibatch['logprobs']
+        approx_kl = minibatch['logprobs'] - new_logprobs
         ratio     = torch.exp(kl.clip(-10, 10))
         surrogate1 = ratio * minibatch['advantages']
         surrogate2 = torch.clamp(ratio, 1 - PPO_EPSILON, 1 + PPO_EPSILON) * minibatch['advantages']
@@ -202,7 +203,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
         concentration_kappa = net_dict['kappa']  # higher kappa = more confident = lower entropy
 
 
-        yield policy_loss, value_loss, entropy.mean(), kl.mean(), concentration_kappa.mean()
+        yield policy_loss, value_loss, entropy.mean(), approx_kl.mean(), concentration_kappa.mean()
 
 
 def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibatch_size=64,
@@ -253,9 +254,9 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
             ):
                 concentration_kappa = torch.log(concentration_kappa)  # log-space penalty for stability
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss + (entropy_coef * concentration_kappa) - entropy_coef * entropy
+                loss = policy_loss + value_loss + (entropy_coef * concentration_kappa) # - entropy_coef * entropy
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5)
                 optimizer.step()
 
                 update_count      += 1
@@ -267,14 +268,14 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
                 epoch_kappa       += (concentration_kappa.item() - epoch_kappa) / update_count  
 
                 # early stopping if KL divergence is too high, to prevent destructive updates
-                if torch.abs(kl).item() > KL_TERMINATION_THRESHOLD:
+                if kl.item() > KL_TERMINATION_THRESHOLD:
                     KL_terminated = True    
                     break
             if KL_terminated:
                 break
 
         test_rollout, debug_dict_test = None, None
-        if epoch % 20 == 0:
+        if epoch % 100 == 0:
             test_rollout, debug_dict_test = generate_rollout(env, ppo_agent, deterministic=True)
 
         if logs_path is not None:
@@ -284,8 +285,9 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
             logger.add_scalar('Loss/KL',      epoch_kl,          epoch)
             logger.add_scalar('Loss/Kappa',   epoch_kappa,       epoch)
             logger.add_scalar('Loss/Total',   epoch_total_loss,  epoch)
+            logger.add_scalar('Stats/Update Count', update_count, epoch)
 
-            if epoch % 20 == 0:
+            if epoch % 100 == 0:
                 final_x0s = denorm_fn(debug_dict['final_x0s']) if denorm_fn is not None else debug_dict['final_x0s']
                 final_x0s = tensorboard_image_process(final_x0s)
                 logger.add_image('Diffusion Samples', final_x0s, epoch)
@@ -365,12 +367,12 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=3e-5,            help='Learning rate for optimizer')
+    parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
     parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
+    parser.add_argument('--entropy_coef',         type=float, default=1e-4,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs',       type=int,   default=4,               help='PPO epochs per update')
+    parser.add_argument('--num_ppo_epochs',       type=int,   default=10,               help='PPO epochs per update')
     parser.add_argument('--sample_multiplier',    type=int,   default=4,               help='x1 samples generated per x0 sample in the environment')
     parser.add_argument('--order',                type=int,   default=1,               help='Order of the method (1=linear, 2=cosine)')
     parser.add_argument('--latent_dim',           type=int,   default=512,             help='Dimensionality of the image state latent space')
