@@ -48,8 +48,8 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 # ---------------------------------------------------------------------------
 
 KAPPA_MIN = 2.005
-RAW_MEAN_MIN = -10.0 
-RAW_MEAN_MAX = 10.0
+RAW_MEAN_MIN = -8.0 
+RAW_MEAN_MAX = 8.0
 
 class NeRFEmbedder(nn.Module):
     """
@@ -96,7 +96,7 @@ class Backbone_Encoder(nn.Module):
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
         self.projection_encoder = nn.Sequential()
-        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 # + self.nerf_embedder.out_dim_per_scalar * 2
+        input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
         for i in range(len(projection_dims)):
             output_dim = projection_dims[i]
             self.projection_encoder.append(
@@ -117,9 +117,9 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
-        # nerf_embeddings = self.nerf_embedder(time_inputs)
-        # combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
-        combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
+        nerf_embeddings = self.nerf_embedder(time_inputs)
+        combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
+        # combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
 
         for layer in self.projection_encoder:
             combined = layer(combined)
@@ -166,13 +166,13 @@ class PPOAgent(nn.Module):
             self.conc_head.weight.normal_(0, 0.1)
 
         self.critic = nn.Linear(backbone_dim, 1)
-        # self.mc_layer = MonteCarloLayer(
-        #     self.critic,
-        #     dropout_p=0.05, mc_samples=256,
-        #     attention_mode='attention', attend_mode='inputs',
-        #     num_heads=8, embedding_size=backbone_dim // 2,
-        #     query_mode='per_sample',
-        # )
+        self.mc_layer = MonteCarloLayer(
+            self.critic,
+            dropout_p=0.05, mc_samples=256,
+            attention_mode='attention', attend_mode='inputs',
+            num_heads=8, embedding_size=backbone_dim // 2,
+            query_mode='per_sample',
+        )
 
     # ------------------------------------------------------------------
     # Helper: raw outputs → α, β
@@ -207,8 +207,8 @@ class PPOAgent(nn.Module):
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        # value = self.mc_layer.get_mean_only(combined_v)
-        value = self.critic(combined_v)
+        value = self.mc_layer.get_mean_only(combined_v)
+        # value = self.critic(combined_v)
 
         if deterministic:
             action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
@@ -236,8 +236,8 @@ class PPOAgent(nn.Module):
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        # value = self.mc_layer.get_mean_only(combined_v)
-        value = self.critic(combined_v)
+        value = self.mc_layer.get_mean_only(combined_v)
+        # value = self.critic(combined_v)
 
         log_prob = dist.log_prob(actions).sum(dim=-1)
         entropy  = dist.entropy().sum(dim=-1)
