@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Define the grids for the loops
-# DATASETS=("CIFAR10" "MNIST") # "CelebAHQ")
-DATASETS=("CIFAR10")
+DATASETS=("CIFAR10" "MNIST") # "CelebAHQ")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 FEATURE_EXTRACTORS=("DINO" "IV3")
@@ -11,50 +10,51 @@ for DS in "${DATASETS[@]}"; do
     # Define dataset-specific hyperparameters
     case $DS in
         "MNIST")
-            S_MULT=4
+            S_MULT=16
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096    
-            F_DIMS=64
+            F_DIMS=128
             N_EPOCHS=2000
-            TIME_ENC="64 256"
+            TIME_ENC="64 256 512"
             PROJ_DIMS="512 256 128"
-            LAT_DIM=256
+            LAT_DIM=512
             LAT_CHAN="16 32 64 128"
             ;;
 
         "CIFAR10")
-            S_MULT=4
+            S_MULT=16
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096
-            F_DIMS=64
+            F_DIMS=128
             N_EPOCHS=2000
-            TIME_ENC="64 256"
+            TIME_ENC="64 256 512"
             PROJ_DIMS="512 256 128"
-            LAT_DIM=256
+            LAT_DIM=512
             LAT_CHAN="16 32 64 128"
             ;;
 
         "CelebAHQ")
-            S_MULT=2
+            S_MULT=8
             B_SIZE=32
             MB_SIZE=256
             T_STEPS=4096
-            F_DIMS=64
+            F_DIMS=128
             N_EPOCHS=2000
-            TIME_ENC="64 256"
+            TIME_ENC="64 256 512"
             PROJ_DIMS="512 256 128"
-            LAT_DIM=256
+            LAT_DIM=512
             LAT_CHAN="8 16 32 64 128 256"
             ;;
         
     esac
 
-    for ORD in "${ORDERS[@]}"; do
-        for BUD in "${BUDGETS[@]}"; do
-            for FEAT in "${FEATURE_EXTRACTORS[@]}"; do
-                JOB_NAME="${DS}_O${ORD}_B${BUD}_${FEAT}"
+    for FE in "${FEATURE_EXTRACTORS[@]}"; do
+        for ORD in "${ORDERS[@]}"; do
+            for BUD in "${BUDGETS[@]}"; do
+                
+                JOB_NAME="${DS}_${FE}_O${ORD}_B${BUD}"
                 
                 sbatch <<EOF
 #!/bin/bash
@@ -86,12 +86,13 @@ python /home/mila/d/daniel.bairamian/RLDiff/train_PPOBeta.py \\
     --projection_dims $PROJ_DIMS \\
     --latent_dim $LAT_DIM \\
     --latent_channels $LAT_CHAN \\
+    --feature_extractor "$FE" \\
     --base_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets/ \\
     --base_logs_path /network/scratch/d/daniel.bairamian/RLDiff_data/logs/PPO/IADB/ \\
-    --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/IADB/ \\
-    --feature_extractor $FEAT
+    --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/IADB/
 EOF
 
+            done
         done
     done
 done

@@ -66,7 +66,7 @@ def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=Fals
         obs = next_obs
         if dones.all():
             last_t           = t + 1
-            final_x0s        = obs['x0']           # kept on GPU for tensorboard
+            final_x0s        = obs['x0'].cpu()
             terminal_rewards = rewards.cpu()
             final_alphas     = obs['alpha'].cpu()
             break
@@ -127,7 +127,7 @@ def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=Fals
     episode_lengths = active_mask.float().sum(dim=0)
 
     debug_dict = {
-        'final_x0s':        final_x0s,           # GPU tensor — for tensorboard images
+        'final_x0s':        final_x0s,             # CPU    
         'terminal_rewards': terminal_rewards,      # CPU
         'episode_lengths':  episode_lengths,       # CPU
         'final_alphas':     final_alphas,          # CPU
@@ -367,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
+    parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
     parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
