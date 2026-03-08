@@ -14,13 +14,8 @@ from tqdm import tqdm
 from src.rl.DiffusionEnv import DiffusionEnv
 from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 
-GAMMA = 1.0
-GAE_LAMBDA = 1.0
-PPO_EPSILON = 0.1
-KL_TERMINATION_THRESHOLD = 0.1  # KL divergence threshold for early stopping of PPO updates
-
 @torch.no_grad()
-def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=False):
+def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=False, gamma=1.0, gae_lambda=1.0):
 
     obs = env.reset()
     T = env.budget
@@ -100,8 +95,8 @@ def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=Fals
     for t in reversed(range(last_t)):
         is_active    = active_mask[t].float()
         not_terminal = 1.0 - b_dones[t].float()
-        delta        = b_rewards[t] + GAMMA * next_value * not_terminal - b_values[t]
-        b_advantages[t] = (delta + GAMMA * GAE_LAMBDA * not_terminal * next_advantage) * is_active
+        delta        = b_rewards[t] + gamma * next_value * not_terminal - b_values[t]
+        b_advantages[t] = (delta + gamma * gae_lambda * not_terminal * next_advantage) * is_active
         next_advantage  = torch.where(active_mask[t], b_advantages[t], next_advantage)
         next_value      = torch.where(active_mask[t], b_values[t],      next_value)
 
@@ -140,12 +135,12 @@ def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=Fals
     return rollout, debug_dict
 
 
-def ppo_buffer_generator(env, ppo_agent, target_steps=256):
+def ppo_buffer_generator(env, ppo_agent, target_steps=256, gamma=1.0, gae_lambda=1.0):
     collected_steps = 0
     rollout_chunks  = []
 
     while collected_steps < target_steps:
-        rollout, debug_dict = generate_rollout(env, ppo_agent)
+        rollout, debug_dict = generate_rollout(env, ppo_agent, gamma=gamma, gae_lambda=gae_lambda)
 
         chunk_size = rollout['states'].shape[0]
         rollout_chunks.append(rollout)
@@ -165,7 +160,7 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256):
     return full_rollout, debug_dict
 
 
-def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
+def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None, ppo_clip_epsilon=0.1):
     for i in range(0, full_rollout['states'].shape[0], minibatch_size):
 
         if i + minibatch_size > full_rollout['states'].shape[0]:
@@ -184,7 +179,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
         approx_kl = minibatch['logprobs'] - new_logprobs
         ratio     = torch.exp(kl.clip(-10, 10))
         surrogate1 = ratio * minibatch['advantages']
-        surrogate2 = torch.clamp(ratio, 1 - PPO_EPSILON, 1 + PPO_EPSILON) * minibatch['advantages']
+        surrogate2 = torch.clamp(ratio, 1 - ppo_clip_epsilon, 1 + ppo_clip_epsilon) * minibatch['advantages']
 
         policy_loss = -torch.min(surrogate1, surrogate2).mean()
 
@@ -193,7 +188,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
         v_old    = minibatch['values']
 
         value_loss_unclipped = (v_pred - v_target) ** 2
-        v_clipped            = v_old + (v_pred - v_old).clamp(-PPO_EPSILON, PPO_EPSILON)
+        v_clipped            = v_old + (v_pred - v_old).clamp(-ppo_clip_epsilon, ppo_clip_epsilon)
         value_loss_clipped   = (v_clipped - v_target) ** 2
         value_loss           = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
@@ -206,15 +201,9 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None):
         yield policy_loss, value_loss, entropy.mean(), approx_kl.mean(), concentration_kappa.mean()
 
 
-def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibatch_size=64,
-              num_ppo_epochs=4, lr=1e-4, weight_decay=1e-5, entropy_coef=0.01,
-              denorm_fn=None, logs_path=None, save_path=None):
+def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, save_path=None):
 
-    print(f"Training PPO for {num_epochs} epochs with target_steps={target_steps}, "
-          f"minibatch_size={minibatch_size}, num_ppo_epochs={num_ppo_epochs}, "
-          f"lr={lr}, weight_decay={weight_decay}, entropy_coef={entropy_coef}")
-
-    optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=ppo_args['lr'], weight_decay=ppo_args['weight_decay'])
 
     logger = SummaryWriter(logs_path)
 
@@ -231,7 +220,7 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
         except Exception as e:
             print(f"Error loading checkpoint: {e}. Starting from scratch.")
 
-    for epoch in tqdm(range(start_epoch, num_epochs + 1)):
+    for epoch in tqdm(range(start_epoch, ppo_args['num_epochs'] + 1)):
         epoch_policy_loss = 0.0
         epoch_value_loss  = 0.0
         epoch_entropy     = 0.0
@@ -242,19 +231,19 @@ def train_PPO(env, ppo_agent, device, num_epochs=1000, target_steps=256, minibat
 
         KL_terminated = False
 
-        rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=target_steps)
+        rollout_buffer, debug_dict = ppo_buffer_generator(env, ppo_agent, target_steps=ppo_args['target_steps'], gamma=ppo_args['gamma'], gae_lambda=ppo_args['gae_lambda'])
 
-        for k in range(num_ppo_epochs):
+        for k in range(ppo_args['num_ppo_epochs']):
             perm = torch.randperm(rollout_buffer['states'].shape[0])
             for key in rollout_buffer.keys():
                 rollout_buffer[key] = rollout_buffer[key][perm]
 
             for policy_loss, value_loss, entropy, kl, concentration_kappa in ppo_update(
-                ppo_agent, device, minibatch_size, full_rollout=rollout_buffer
+                ppo_agent, device, ppo_args['minibatch_size'], full_rollout=rollout_buffer, ppo_clip_epsilon=ppo_args['ppo_clip_epsilon']
             ):
                 concentration_kappa = torch.log(concentration_kappa)  # log-space penalty for stability
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss + (entropy_coef * concentration_kappa) # - entropy_coef * entropy
+                loss = policy_loss + value_loss + (ppo_args['entropy_coef'] * concentration_kappa) # - entropy_coef * ppo_args['entropy_coef']
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=0.5)
                 optimizer.step()
@@ -368,7 +357,7 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
     parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay',         type=float, default=1e-5,            help='Weight decay for optimizer')
+    parser.add_argument('--weight_decay',         type=float, default=0.0,            help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=512,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
@@ -378,7 +367,15 @@ if __name__ == "__main__":
     parser.add_argument('--latent_dim',           type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',      type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
     parser.add_argument('--feature_extractor',    type=str,   default="DINO",          help='Feature extractor to use: IV3, DINO')
+    parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.1,             help='Clipping epsilon for PPO updates')
+    parser.add_argument('--gae_lambda',           type=float, default=1.0,            help='GAE lambda for advantage estimation')
+    parser.add_argument('--gamma',                type=float, default=1.0,             help='Discount factor for rewards')
+    parser.add_argument('--kl_termination_value', type=float, default=0.1,             help='KL divergence threshold for early stopping of PPO updates')
+    parser.add_argument('--seed',                 type=int,   default=42,              help='Random seed for reproducibility')
     args = parser.parse_args()
+
+
+    torch.manual_seed(args.seed)
 
     if args.dataset == "CIFAR10":
         load_fn = CIFAR_dataloader
@@ -421,18 +418,25 @@ if __name__ == "__main__":
         projection_dims=args.projection_dims,
         action_dim=1,
         mean_action_init=(1.0 / env.budget),
-        concentration_init=8.0
+        concentration_init=4.0
     ).to(device)
 
+    ppo_args = {
+        'num_epochs': args.num_epochs,
+        'target_steps': args.target_steps,
+        'minibatch_size': args.minibatch_size,
+        'num_ppo_epochs': args.num_ppo_epochs,
+        'lr': args.lr,
+        'weight_decay': args.weight_decay,
+        'entropy_coef': args.entropy_coef,
+        'gamma': args.gamma,
+        'gae_lambda': args.gae_lambda,
+        'ppo_clip_epsilon': args.ppo_clip_epsilon,
+        'kl_termination_value': args.kl_termination_value,
+    }
+
     train_PPO(
-        env, ppo_agent, device,
-        num_epochs=args.num_epochs,
-        target_steps=args.target_steps,
-        minibatch_size=args.minibatch_size,
-        num_ppo_epochs=args.num_ppo_epochs,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        entropy_coef=args.entropy_coef,
+        env, ppo_agent, device, ppo_args,
         denorm_fn=denorm_fn,
         logs_path=logs_path,
         save_path=save_path,

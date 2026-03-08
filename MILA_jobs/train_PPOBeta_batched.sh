@@ -19,7 +19,7 @@ for DS in "${DATASETS[@]}"; do
             TIME_ENC="64 256 512"
             PROJ_DIMS="512 256 128"
             LAT_DIM=512
-            LAT_CHAN="16 32 64 128"
+            LAT_CHAN="8 16 32 64"
             ;;
 
         "CIFAR10")
@@ -32,7 +32,7 @@ for DS in "${DATASETS[@]}"; do
             TIME_ENC="64 256 512"
             PROJ_DIMS="512 256 128"
             LAT_DIM=512
-            LAT_CHAN="16 32 64 128"
+            LAT_CHAN="8 16 32 64"
             ;;
 
         "CelebAHQ")

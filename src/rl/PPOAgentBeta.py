@@ -79,7 +79,7 @@ class Backbone_Encoder(nn.Module):
     def __init__(self, state_dim: int, fused_dims: int, time_encoder_dims: List[int], projection_dims: List[int]):
         super(Backbone_Encoder, self).__init__()
 
-        self.nerf_embedder = NeRFEmbedder(L=16)
+        self.nerf_embedder = NeRFEmbedder(L=8)
 
         self.time_encoder = nn.ModuleList()
         input_dim = 2
@@ -102,6 +102,7 @@ class Backbone_Encoder(nn.Module):
             self.projection_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
+                    nn.LayerNorm(output_dim),
                     nn.SiLU(),
                 )
             )
@@ -170,7 +171,7 @@ class PPOAgent(nn.Module):
             self.critic,
             dropout_p=0.05, mc_samples=256,
             attention_mode='attention', attend_mode='inputs',
-            num_heads=8, embedding_size=backbone_dim // 2,
+            num_heads=4, embedding_size=backbone_dim // 2,
             query_mode='per_sample',
         )
 
