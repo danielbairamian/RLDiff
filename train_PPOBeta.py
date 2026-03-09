@@ -241,7 +241,8 @@ def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, 
             for policy_loss, value_loss, entropy, kl, concentration_kappa in ppo_update(
                 ppo_agent, device, ppo_args['minibatch_size'], full_rollout=rollout_buffer, ppo_clip_epsilon=ppo_args['ppo_clip_epsilon']
             ):
-                concentration_kappa = torch.log(concentration_kappa)  # log-space penalty for stability
+                # concentration_kappa = torch.log(concentration_kappa)  # log-space penalty for stability
+                concentration_kappa = torch.log(1.0 + concentration_kappa) # softplus penalty
                 optimizer.zero_grad()
                 loss = policy_loss + value_loss + (ppo_args['entropy_coef'] * concentration_kappa) # - entropy_coef * ppo_args['entropy_coef']
                 loss.backward()
