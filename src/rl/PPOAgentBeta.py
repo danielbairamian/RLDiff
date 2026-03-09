@@ -95,6 +95,10 @@ class Backbone_Encoder(nn.Module):
 
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
 
+        self.norm_fusd = nn.LayerNorm(fused_dims)
+        self.norm_state = nn.LayerNorm(state_dim)
+        self.norm_time = nn.LayerNorm(time_encoder_dims[-1])
+
         self.projection_encoder = nn.Sequential()
         input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
         for i in range(len(projection_dims)):
@@ -102,7 +106,6 @@ class Backbone_Encoder(nn.Module):
             self.projection_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.LayerNorm(output_dim),
                     nn.SiLU(),
                 )
             )
@@ -118,6 +121,12 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
+        
+        # normalize all state components before concatenation
+        fused         = self.norm_fusd(fused)
+        state         = self.norm_state(state)
+        time_encoding = self.norm_time(time_encoding)
+        
         nerf_embeddings = self.nerf_embedder(time_inputs)
         combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
         # combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
@@ -159,6 +168,7 @@ class PPOAgent(nn.Module):
 
         mean_action_init = np.log(mean_action_init / (1 - mean_action_init))  # Inverse sigmoid to get initial raw_mean
         conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
+        # conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
             self.mean_head.bias.normal_(mean_action_init, 0.1)
             self.mean_head.weight.normal_(0, 0.1)
