@@ -134,8 +134,8 @@ class DiffusionEnv:
         else:
             self.z_real_norm = None  # No rewards in eval mode, so no need to compute or store this
         
-        self.k = 1
-        # self.k = max(1, int(0.01 * self.x1.shape[0])) # Top 1% of the batch 
+        # self.k = 1
+        self.k = max(1, int(0.02 * self.x1.shape[0])) # Top 2% of the batch 
 
         self.x0 = torch.randn_like(self.x1).to(self.device)
         self.x0 = self.x0[:self.x1.shape[0]//self.sample_multiplier] 
