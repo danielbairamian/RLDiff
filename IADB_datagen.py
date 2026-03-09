@@ -85,12 +85,14 @@ if __name__ == "__main__":
     parser.add_argument('--fused_dims',                 type=int,   default=64,              help='Dimension of the fused state-time representation')
     parser.add_argument('--time_encoder_dims',          type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',            type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
-    parser.add_argument('--order',                      type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
+    parser.add_argument('--order',                      type=int,   default=1,               help='Order of the method (1=linear, 2=cosine)')
     parser.add_argument('--latent_dim',                 type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
-    parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
+    parser.add_argument('--schedule',                   type=str,   default='cosine',        help='Schedule for noise levels: linear or cosine or RL')
     parser.add_argument('--start_idx_offset',           type=int,   default=1,               help='Starting index offset for resuming generation to avoid corrupted images' )
     parser.add_argument('--seed',                       type=int,   default=42,              help='Random seed for reproducibility' )
+    parser.add_argument('--feature_extractor',          type=str,   default="DINO",          help='Feature extractor to use: IV3, DINO')
+
 
     args = parser.parse_args()
 
@@ -106,8 +108,12 @@ if __name__ == "__main__":
 
     dataset_path     = args.base_dataset_path + args.dataset
     ppo_exp_suffix   = f"{args.dataset}_NFE_{args.budget}_order_{args.order}"
-    data_log_suffix  = f"{args.dataset}_NFE_{args.budget}_order{args.order}_schedule_{args.schedule}"
-    
+    # data_log_suffix= f"{args.dataset}_NFE_{args.budget}_order_{args.order}_{args.feature_extractor}_schedule_{args.schedule}"
+    data_log_suffix  = ppo_exp_suffix 
+    if args.schedule == "RL":
+        data_log_suffix += f"_{args.feature_extractor}"
+    data_log_suffix += f"_schedule_{args.schedule}"
+
     data_save_path   = args.base_FID_dataset_path + f"FID_Images/{data_log_suffix}/"
     traj_save_path   = args.base_FID_dataset_path + f"FID_Trajectories/{data_log_suffix}/"
     diffusion_path   = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
@@ -130,7 +136,7 @@ if __name__ == "__main__":
     env = DiffusionEnv(
         dataloader=dataloader, iadb_model=iadb_model, device=device,
         order=args.order, budget=args.budget,
-        sample_multiplier=1, denorm_fn=denorm_fn, eval_mode=True
+        sample_multiplier=1, denorm_fn=denorm_fn, eval_mode=True, feature_extractor=args.feature_extractor
     )
     
     torch.manual_seed(args.seed)
@@ -160,7 +166,7 @@ if __name__ == "__main__":
     print(ppo_agent)
 
 
-    TOTAL_SAMPLES = 50_000
+    TOTAL_SAMPLES = 16 # 50_000
     IMAGE_EXT = '.png'
 
 
