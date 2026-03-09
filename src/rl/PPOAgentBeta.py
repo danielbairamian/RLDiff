@@ -167,8 +167,8 @@ class PPOAgent(nn.Module):
         self.conc_head = nn.Linear(backbone_dim, action_dim)
 
         mean_action_init = np.log(mean_action_init / (1 - mean_action_init))  # Inverse sigmoid to get initial raw_mean
-        conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
-        # conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
+        # conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
+        conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
             self.mean_head.bias.normal_(mean_action_init, 0.1)
             self.mean_head.weight.normal_(0, 0.1)
@@ -200,8 +200,8 @@ class PPOAgent(nn.Module):
         raw_mean_clamped = raw_mean + (raw_mean.clamp(RAW_MEAN_MIN, RAW_MEAN_MAX) - raw_mean).detach()
         mu = torch.sigmoid(raw_mean_clamped)
 
-        kappa = F.softplus(raw_conc) + KAPPA_MIN
-        # kappa = torch.exp(raw_conc) + KAPPA_MIN
+        # kappa = F.softplus(raw_conc) + KAPPA_MIN
+        kappa = torch.exp(raw_conc) + KAPPA_MIN
 
         alpha = 1.0 + mu * (kappa - 2.0)
         beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
