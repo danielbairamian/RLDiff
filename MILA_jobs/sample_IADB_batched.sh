@@ -1,27 +1,25 @@
 #!/bin/bash
 
-# Define the grids for the loops
-# DATASETS=("CIFAR10" "MNIST" "CelebAHQ")
 DATASETS=("CIFAR10" "MNIST")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 SCHEDULES=("RL" "linear" "cosine")
+RL_FES=("IV3" "DINO")
 
 for DS in "${DATASETS[@]}"; do
-    # Define dataset-specific hyperparameters
     case $DS in
         "MNIST")
             B_SIZE=128
-            F_DIMS=64
-            TIME_ENC="64 256"
-            PROJ_DIMS="512 256 128"
+            F_DIMS=64 
+            TIME_ENC="64 256" 
+            PROJ_DIMS="512 256 128" 
             LAT_DIM=256
-            LAT_CHAN="16 32 64 128"
+            LAT_CHAN="16 32 64 128" 
             ;;
 
         "CIFAR10")
-            B_SIZE=128
-            F_DIMS=64
+            B_SIZE=128 
+            F_DIMS=64 
             TIME_ENC="64 256"
             PROJ_DIMS="512 256 128"
             LAT_DIM=256
@@ -30,7 +28,7 @@ for DS in "${DATASETS[@]}"; do
 
         "CelebAHQ")
             B_SIZE=32
-            F_DIMS=64
+            F_DIMS=64 
             TIME_ENC="64 256"
             PROJ_DIMS="512 256 128"
             LAT_DIM=256
@@ -41,11 +39,24 @@ for DS in "${DATASETS[@]}"; do
     for ORD in "${ORDERS[@]}"; do
         for BUD in "${BUDGETS[@]}"; do
             for SCHED in "${SCHEDULES[@]}"; do
-                
-                # Updated Job Name to include Schedule (e.g., GEN_MNIST_O1_B10_RL)
-                JOB_NAME="GEN_${DS}_O${ORD}_B${BUD}_${SCHED}"
-                
-                sbatch <<EOF
+
+                if [ "$SCHED" == "RL" ]; then
+                    FE_LIST=("${RL_FES[@]}")
+                else
+                    FE_LIST=("none")
+                fi
+
+                for FE in "${FE_LIST[@]}"; do
+
+                    if [ "$SCHED" == "RL" ]; then
+                        JOB_NAME="GEN_${DS}_O${ORD}_B${BUD}_${SCHED}_${FE}"
+                        FE_ARG="--feature_extractor $FE"
+                    else
+                        JOB_NAME="GEN_${DS}_O${ORD}_B${BUD}_${SCHED}"
+                        FE_ARG=""
+                    fi
+
+                    sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=$JOB_NAME
 #SBATCH --partition=long
@@ -56,17 +67,16 @@ for DS in "${DATASETS[@]}"; do
 #SBATCH --requeue
 #SBATCH -o /network/scratch/d/daniel.bairamian/RLDiff_data/SLURM_DUMP/${JOB_NAME}-%j.out
 
-# Load Environment
 module --quiet load anaconda/3
 conda activate RLDiff 
 
-# Launch data generation script
 python /home/mila/d/daniel.bairamian/RLDiff/IADB_datagen.py \\
     --dataset "$DS" \\
     --batch_size $B_SIZE \\
     --budget "$BUD" \\
     --order "$ORD" \\
     --schedule "$SCHED" \\
+    $FE_ARG \\
     --fused_dims $F_DIMS \\
     --time_encoder_dims $TIME_ENC \\
     --projection_dims $PROJ_DIMS \\
@@ -78,6 +88,7 @@ python /home/mila/d/daniel.bairamian/RLDiff/IADB_datagen.py \\
     --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/IADB/
 EOF
 
+                done
             done
         done
     done

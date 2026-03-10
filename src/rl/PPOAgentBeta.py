@@ -160,7 +160,7 @@ class PPOAgent(nn.Module):
 
         self.vision_encoder = vision_encoder
         self.backbone = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
-        self.backbone_v = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
+        # self.backbone_v = Backbone_Encoder(state_dim, fused_dims, time_encoder_dims, projection_dims)
         backbone_dim = self.backbone.backbone_out_dim
 
         self.mean_head = nn.Linear(backbone_dim, action_dim)
@@ -214,16 +214,17 @@ class PPOAgent(nn.Module):
     def forward(self, state, alpha_t, steps, deterministic=False):
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
-        combined_v = self.backbone_v(state_enc, alpha_t, steps)
+        # combined_v = self.backbone_v(state_enc, alpha_t, steps)
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        value = self.mc_layer.get_mean_only(combined_v)
+        # value = self.mc_layer.get_mean_only(combined_v)
+        value = self.mc_layer.get_mean_only(combined)
         # value = self.critic(combined_v)
 
         if deterministic:
-            action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
-            # action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            # action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
         else:
             action = dist.sample()
 
@@ -243,11 +244,12 @@ class PPOAgent(nn.Module):
         actions = actions.clamp(1e-6, 1.0 - 1e-6)
 
         combined = self.backbone(state_enc, alpha_t, steps)
-        combined_v = self.backbone_v(state_enc, alpha_t, steps)
+        # combined_v = self.backbone_v(state_enc, alpha_t, steps)
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        value = self.mc_layer.get_mean_only(combined_v)
+        # value = self.mc_layer.get_mean_only(combined_v)
+        value = self.mc_layer.get_mean_only(combined)
         # value = self.critic(combined_v)
 
         log_prob = dist.log_prob(actions).sum(dim=-1)
