@@ -357,14 +357,14 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
-    parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef',         type=float, default=1e-4,             help='Entropy coefficient for PPO')
+    parser.add_argument('--lr',                   type=float, default=1e-5,            help='Learning rate for optimizer')
+    parser.add_argument('--weight_decay',         type=float, default=0.0,            help='Weight decay for optimizer')
+    parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=64,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
-    parser.add_argument('--num_ppo_epochs',       type=int,   default=8,               help='PPO epochs per update')
+    parser.add_argument('--num_ppo_epochs',       type=int,   default=4,               help='PPO epochs per update')
     parser.add_argument('--sample_multiplier',    type=int,   default=4,               help='x1 samples generated per x0 sample in the environment')
-    parser.add_argument('--order',                type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
+    parser.add_argument('--order',                type=int,   default=2,               help='Order of the method')
     parser.add_argument('--latent_dim',           type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',      type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
     parser.add_argument('--feature_extractor',    type=str,   default="IV3",          help='Feature extractor to use: IV3, DINO')
@@ -418,8 +418,8 @@ if __name__ == "__main__":
         time_encoder_dims=args.time_encoder_dims,
         projection_dims=args.projection_dims,
         action_dim=1,
-        mean_action_init=(1.0 / env.budget),
-        concentration_init=8.0
+        mean_action_init=0.5,  # (1.0 / env.budget),
+        concentration_init=4.0
     ).to(device)
 
     ppo_args = {
