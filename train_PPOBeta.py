@@ -368,7 +368,7 @@ if __name__ == "__main__":
     parser.add_argument('--latent_dim',           type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',      type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
     parser.add_argument('--feature_extractor',    type=str,   default="IV3",          help='Feature extractor to use: IV3, DINO')
-    parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.2,             help='Clipping epsilon for PPO updates')
+    parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.1,             help='Clipping epsilon for PPO updates')
     parser.add_argument('--gae_lambda',           type=float, default=1.0,            help='GAE lambda for advantage estimation')
     parser.add_argument('--gamma',                type=float, default=1.0,             help='Discount factor for rewards')
     parser.add_argument('--kl_termination_value', type=float, default=0.1,             help='KL divergence threshold for early stopping of PPO updates')
