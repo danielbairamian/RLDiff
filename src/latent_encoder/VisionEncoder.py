@@ -38,7 +38,6 @@ class VisionEncoder(nn.Module):
 
 
         self.projection_layer = nn.Linear(self.flattened_size, latent_dim)
-        self.projection_layer_norm = nn.LayerNorm(latent_dim)
         self.flatten = nn.Flatten()
 
     def encode(self, x):
@@ -46,6 +45,5 @@ class VisionEncoder(nn.Module):
             x = layer(x)
         x = self.flatten(x)
         x = self.projection_layer(x)
-        x = self.projection_layer_norm(x)
-        x = F.tanh(x)
+        x = F.silu(x)
         return x

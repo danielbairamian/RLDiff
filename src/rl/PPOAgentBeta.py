@@ -79,7 +79,7 @@ class Backbone_Encoder(nn.Module):
     def __init__(self, state_dim: int, fused_dims: int, time_encoder_dims: List[int], projection_dims: List[int]):
         super(Backbone_Encoder, self).__init__()
 
-        self.nerf_embedder = NeRFEmbedder(L=8)
+        self.nerf_embedder = NeRFEmbedder(L=10)  # 10 frequencies per scalar → 20 dims per scalar
 
         self.time_encoder = nn.ModuleList()
         input_dim = 2
@@ -88,14 +88,12 @@ class Backbone_Encoder(nn.Module):
             self.time_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.LayerNorm(output_dim),
-                    nn.Tanh(),
+                    nn.SiLU(),
                 )
             )
             input_dim = output_dim
 
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
-        self.fused_latent_norm = nn.LayerNorm(fused_dims)
         self.projection_encoder = nn.Sequential()
         input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
         for i in range(len(projection_dims)):
@@ -103,8 +101,7 @@ class Backbone_Encoder(nn.Module):
             self.projection_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.LayerNorm(output_dim),
-                    nn.Tanh(),
+                    nn.SiLU(),
                 )
             )
             input_dim = output_dim
@@ -119,8 +116,7 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
-        fused = self.fused_latent_norm(fused)
-        fused = F.tanh(fused)
+        fused = F.silu(fused)
 
         nerf_embeddings = self.nerf_embedder(time_inputs)
         combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
@@ -172,13 +168,13 @@ class PPOAgent(nn.Module):
             self.conc_head.weight.normal_(0, 0.1)
 
         self.critic = nn.Linear(backbone_dim, 1)
-        self.mc_layer = MonteCarloLayer(
-            self.critic,
-            dropout_p=0.05, mc_samples=256,
-            attention_mode='attention', attend_mode='inputs',
-            num_heads=4, embedding_size=backbone_dim // 2,
-            query_mode='per_sample',
-        )
+        # self.mc_layer = MonteCarloLayer(
+        #     self.critic,
+        #     dropout_p=0.05, mc_samples=256,
+        #     attention_mode='attention', attend_mode='inputs',
+        #     num_heads=4, embedding_size=backbone_dim // 2,
+        #     query_mode='per_sample',
+        # )
 
     # ------------------------------------------------------------------
     # Helper: raw outputs → α, β
@@ -214,8 +210,8 @@ class PPOAgent(nn.Module):
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         # value = self.mc_layer.get_mean_only(combined_v)
-        value = self.mc_layer.get_mean_only(combined)
-        # value = self.critic(combined_v)
+        # value = self.mc_layer.get_mean_only(combined)
+        value = self.critic(combined)
 
         if deterministic:
             # action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
@@ -244,7 +240,7 @@ class PPOAgent(nn.Module):
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         # value = self.mc_layer.get_mean_only(combined_v)
-        value = self.mc_layer.get_mean_only(combined)
+        value = self.critic(combined)
         # value = self.critic(combined_v)
 
         log_prob = dist.log_prob(actions).sum(dim=-1)
