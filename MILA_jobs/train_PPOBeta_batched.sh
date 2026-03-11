@@ -13,7 +13,7 @@ for DS in "${DATASETS[@]}"; do
             S_MULT=16
             B_SIZE=64
             MB_SIZE=256
-            T_STEPS=8192    
+            T_STEPS=4096    
             F_DIMS=64
             N_EPOCHS=2000
             TIME_ENC="32 64 256"
@@ -26,7 +26,7 @@ for DS in "${DATASETS[@]}"; do
             S_MULT=16
             B_SIZE=64
             MB_SIZE=256
-            T_STEPS=8192
+            T_STEPS=4096
             F_DIMS=64
             N_EPOCHS=2000
             TIME_ENC="32 64 256"

@@ -88,17 +88,14 @@ class Backbone_Encoder(nn.Module):
             self.time_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.SiLU(),
+                    nn.LayerNorm(output_dim),
+                    nn.Tanh(),
                 )
             )
             input_dim = output_dim
 
         self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
-
-        self.norm_fusd = nn.LayerNorm(fused_dims)
-        self.norm_state = nn.LayerNorm(state_dim)
-        self.norm_time = nn.LayerNorm(time_encoder_dims[-1])
-
+        self.fused_latent_norm = nn.LayerNorm(fused_dims)
         self.projection_encoder = nn.Sequential()
         input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
         for i in range(len(projection_dims)):
@@ -106,7 +103,8 @@ class Backbone_Encoder(nn.Module):
             self.projection_encoder.append(
                 nn.Sequential(
                     nn.Linear(input_dim, output_dim),
-                    nn.SiLU(),
+                    nn.LayerNorm(output_dim),
+                    nn.Tanh(),
                 )
             )
             input_dim = output_dim
@@ -121,12 +119,9 @@ class Backbone_Encoder(nn.Module):
             time_encoding = layer(time_encoding)
 
         fused = self.fused_latent(state, time_inputs)
-        
-        # normalize all state components before concatenation
-        fused         = self.norm_fusd(fused)
-        state         = self.norm_state(state)
-        time_encoding = self.norm_time(time_encoding)
-        
+        fused = self.fused_latent_norm(fused)
+        fused = F.tanh(fused)
+
         nerf_embeddings = self.nerf_embedder(time_inputs)
         combined = torch.cat([fused, time_encoding, state, time_inputs, nerf_embeddings], dim=-1)
         # combined = torch.cat([fused, time_encoding, state, time_inputs], dim=-1)
