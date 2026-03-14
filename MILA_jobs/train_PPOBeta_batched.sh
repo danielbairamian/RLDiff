@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define the grids for the loops
-DATASETS=("CIFAR10" "MNIST") # "CelebAHQ")
+DATASETS=("CIFAR10" "MNIST" "CelebAHQ")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 FEATURE_EXTRACTORS=("DINO" "IV3")
@@ -17,7 +17,7 @@ for DS in "${DATASETS[@]}"; do
             F_DIMS=64
             N_EPOCHS=2000
             TIME_ENC="32 64 256"
-            PROJ_DIMS="512 256 128"
+            PROJ_DIMS="512 256 128 64"
             LAT_DIM=512
             LAT_CHAN="8 16 32 64"
             ;;
@@ -30,7 +30,7 @@ for DS in "${DATASETS[@]}"; do
             F_DIMS=64
             N_EPOCHS=2000
             TIME_ENC="32 64 256"
-            PROJ_DIMS="512 256 128"
+            PROJ_DIMS="512 256 128 64"
             LAT_DIM=512
             LAT_CHAN="8 16 32 64"
             ;;
@@ -43,7 +43,7 @@ for DS in "${DATASETS[@]}"; do
             F_DIMS=64
             N_EPOCHS=2000
             TIME_ENC="32 64 256"
-            PROJ_DIMS="512 256 128"
+            PROJ_DIMS="512 256 128 64"
             LAT_DIM=512
             LAT_CHAN="8 16 32 64 128 256"
             ;;
