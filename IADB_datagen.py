@@ -168,8 +168,8 @@ if __name__ == "__main__":
     print(ppo_agent)
 
 
-    TOTAL_SAMPLES = 64 # 50_000
-    # TOTAL_SAMPLES = 50_000
+    # TOTAL_SAMPLES = 64 # 50_000
+    TOTAL_SAMPLES = 50_000
     IMAGE_EXT = '.png'
 
 
