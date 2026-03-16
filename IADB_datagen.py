@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -85,10 +87,10 @@ if __name__ == "__main__":
     parser.add_argument('--fused_dims',                 type=int,   default=64,              help='Dimension of the fused state-time representation')
     parser.add_argument('--time_encoder_dims',          type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',            type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
-    parser.add_argument('--order',                      type=int,   default=1,               help='Order of the method (1=linear, 2=cosine)')
+    parser.add_argument('--order',                      type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
     parser.add_argument('--latent_dim',                 type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
-    parser.add_argument('--schedule',                   type=str,   default='cosine',        help='Schedule for noise levels: linear or cosine or RL')
+    parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
     parser.add_argument('--start_idx_offset',           type=int,   default=1,               help='Starting index offset for resuming generation to avoid corrupted images' )
     parser.add_argument('--seed',                       type=int,   default=42,              help='Random seed for reproducibility' )
     parser.add_argument('--feature_extractor',          type=str,   default="DINO",          help='Feature extractor to use: IV3, DINO')
@@ -166,7 +168,8 @@ if __name__ == "__main__":
     print(ppo_agent)
 
 
-    TOTAL_SAMPLES = 16 # 50_000
+    TOTAL_SAMPLES = 64 # 50_000
+    # TOTAL_SAMPLES = 50_000
     IMAGE_EXT = '.png'
 
 
@@ -179,10 +182,35 @@ if __name__ == "__main__":
 
     pbar = tqdm(total=TOTAL_SAMPLES, initial=start_idx, desc="Generating IADB dataset")
     current_idx = start_idx
+   
+    # --- Initialize before the loop ---
+    step_counts = torch.zeros(args.budget + 1, dtype=torch.long)  # index = step value
+    welford_n   = 0
+    welford_mean = 0.0
+    welford_M2   = 0.0  # sum of squared deviations
+
     with torch.no_grad():
         while current_idx < TOTAL_SAMPLES:
             # x1 = sample_iadb_linear_first_order(iadb_model, x0, nb_step=args.budget)
             x1, trajectory_dict = sampling_strategy(iadb_model, nb_step=args.budget, order=args.order, schedule=args.schedule, ppo_agent=ppo_agent, env=env)
+
+            mask = (trajectory_dict['alphas'] == 1.0)  # [trajectory, batch_size]
+            steps = mask.float().argmax(dim=0)          # [batch_size] — first True along trajectory dim
+
+            # 1. Update frequency table (exact median)
+            for s in steps:
+                step_counts[s.item()] += 1
+
+            # 2. Welford's online mean + variance
+            for s in steps:
+                x = float(s.item())
+                welford_n    += 1
+                delta         = x - welford_mean
+                welford_mean += delta / welford_n
+                delta2        = x - welford_mean
+                welford_M2   += delta * delta2
+
+
             x1 = denorm_fn(x1)
             x1 = torch.clamp(x1, 0, 1)  # Ensure pixel values are in [0, 1]
             for i in range(x1.shape[0]):
@@ -209,3 +237,31 @@ if __name__ == "__main__":
                 print(f"Saved first trajectory with {states.shape[1]} states to {os.path.join(traj_save_path, 'iadb_trajectories.pth')}")
                 print(f"States shape: {states.shape}, Alphas shape: {alphas.shape}")
                 print(f"Example state pixel range: {states.min().item()} to {states.max().item()}")
+
+
+    # --- After the loop ---
+    global_mean = welford_mean
+    global_std  = math.sqrt(welford_M2 / welford_n)  # population std
+    # global_std = math.sqrt(welford_M2 / (welford_n - 1))  # sample std
+
+    # Exact median from frequency table
+    half = welford_n / 2
+    cumsum = 0
+    global_median = None
+    for val, count in enumerate(step_counts):
+        cumsum += count.item()
+        if cumsum >= half:
+            global_median = val
+            break
+
+    # Global max and min
+    global_max = torch.where(step_counts > 0)[0].max().item()
+    global_min = torch.where(step_counts > 0)[0].min().item()
+
+
+    print(f"Global mean of steps: {global_mean:.4f}")
+    print(f"Global std of steps: {global_std:.4f}")
+    print(f"Global median of steps: {global_median}")
+    print(f"Global max of steps: {global_max}")
+    print(f"Global min of steps: {global_min}")
+    print(f"Total samples: {welford_n}")

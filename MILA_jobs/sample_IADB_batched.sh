@@ -11,27 +11,27 @@ for DS in "${DATASETS[@]}"; do
         "MNIST")
             B_SIZE=128
             F_DIMS=64 
-            TIME_ENC="64 256" 
-            PROJ_DIMS="512 256 128" 
-            LAT_DIM=256
-            LAT_CHAN="16 32 64 128" 
+            TIME_ENC="32 64 256" 
+            PROJ_DIMS="512 256 128 64" 
+            LAT_DIM=512
+            LAT_CHAN="8 16 32 64" 
             ;;
 
         "CIFAR10")
             B_SIZE=128 
             F_DIMS=64 
-            TIME_ENC="64 256"
-            PROJ_DIMS="512 256 128"
-            LAT_DIM=256
-            LAT_CHAN="16 32 64 128"
+            TIME_ENC="32 64 256"
+            PROJ_DIMS="512 256 128 64"
+            LAT_DIM=512
+            LAT_CHAN="8 16 32 64"
             ;;
 
         "CelebAHQ")
             B_SIZE=32
             F_DIMS=64 
-            TIME_ENC="64 256"
-            PROJ_DIMS="512 256 128"
-            LAT_DIM=256
+            TIME_ENC="32 64 256"
+            PROJ_DIMS="512 256 128 64"
+            LAT_DIM=512
             LAT_CHAN="8 16 32 64 128 256"
             ;;
     esac
