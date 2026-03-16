@@ -161,20 +161,20 @@ class PPOAgent(nn.Module):
         conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
         # conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
-            self.mean_head.bias.normal_(mean_action_init, 0.01)
-            self.mean_head.weight.normal_(0, 0.01)
+            self.mean_head.bias.normal_(mean_action_init, 0.1)
+            self.mean_head.weight.normal_(0, 0.1)
 
-            self.conc_head.bias.normal_(conc_init, 0.01)
-            self.conc_head.weight.normal_(0, 0.01)
+            self.conc_head.bias.normal_(conc_init, 0.1)
+            self.conc_head.weight.normal_(0, 0.1)
 
         self.critic = nn.Linear(backbone_dim, 1)
-        # self.mc_layer = MonteCarloLayer(
-        #     self.critic,
-        #     dropout_p=0.05, mc_samples=256,
-        #     attention_mode='attention', attend_mode='inputs',
-        #     num_heads=4, embedding_size=backbone_dim // 2,
-        #     query_mode='per_sample',
-        # )
+        self.mc_layer = MonteCarloLayer(
+            self.critic,
+            dropout_p=0.05, mc_samples=256,
+            attention_mode='attention', attend_mode='inputs',
+            num_heads=4, embedding_size=backbone_dim // 2,
+            query_mode='per_sample',
+        )
 
     # ------------------------------------------------------------------
     # Helper: raw outputs → α, β
@@ -210,12 +210,12 @@ class PPOAgent(nn.Module):
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
         # value = self.mc_layer.get_mean_only(combined_v)
-        # value = self.mc_layer.get_mean_only(combined)
-        value = self.critic(combined)
+        value = self.mc_layer.get_mean_only(combined)
+        # value = self.critic(combined)
 
         if deterministic:
-            # action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
-            action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            # action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
         else:
             action = dist.sample()
 
@@ -239,8 +239,8 @@ class PPOAgent(nn.Module):
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
-        # value = self.mc_layer.get_mean_only(combined)
-        value = self.critic(combined)
+        value = self.mc_layer.get_mean_only(combined)
+        # value = self.critic(combined)
         # value = self.critic(combined_v)
 
         log_prob = dist.log_prob(actions).sum(dim=-1)

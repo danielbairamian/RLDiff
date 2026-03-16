@@ -10,7 +10,7 @@ for DS in "${DATASETS[@]}"; do
     # Define dataset-specific hyperparameters
     case $DS in
         "MNIST")
-            S_MULT=16
+            S_MULT=8
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096    
@@ -23,7 +23,7 @@ for DS in "${DATASETS[@]}"; do
             ;;
 
         "CIFAR10")
-            S_MULT=16
+            S_MULT=8
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096
