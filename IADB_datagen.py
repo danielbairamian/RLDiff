@@ -120,7 +120,7 @@ if __name__ == "__main__":
     traj_save_path   = args.base_FID_dataset_path + f"FID_Trajectories/{data_log_suffix}/"
     diffusion_path   = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
     
-    ppo_save_path    = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}/"
+    ppo_save_path    = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}_{args.feature_extractor}/"
 
     os.makedirs(data_save_path, exist_ok=True)
     os.makedirs(traj_save_path, exist_ok=True)
