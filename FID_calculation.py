@@ -50,7 +50,9 @@ if __name__ == "__main__":
     parser.add_argument('--base_dataset_path',          type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
     parser.add_argument('--base_FID_dataset_path',      type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets_FID/',        help='Base path for datasets')
     parser.add_argument('--order',                      type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
-    parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
+    parser.add_argument('--schedule',                   type=str,   default='cosine',        help='Schedule for noise levels: linear or cosine or RL')
+    parser.add_argument('--feature_extractor',          type=str,   default="IV3",          help='Feature extractor to use: IV3, DINO')
+
     args = parser.parse_args()
 
 
@@ -64,7 +66,11 @@ if __name__ == "__main__":
         raise ValueError("Unsupported dataset. Choose from: CIFAR10, MNIST, CelebAHQ")
 
     dataset_path     = args.base_dataset_path + args.dataset
-    data_log_suffix  = f"{args.dataset}_NFE_{args.budget}_order{args.order}_schedule_{args.schedule}"
+    data_log_suffix  = f"{args.dataset}_NFE_{args.budget}_order_{args.order}"
+    if args.schedule == 'RL':
+        data_log_suffix += f"_{args.feature_extractor}"
+    data_log_suffix += f"_schedule_{args.schedule}"
+
     data_save_path   = args.base_FID_dataset_path + f"FID_Images/{data_log_suffix}/"
 
     real_dataloader, info_dict, denorm_fn= load_fn(dataset_path, batch_size=args.batch_size, train=True, drop_last=False)

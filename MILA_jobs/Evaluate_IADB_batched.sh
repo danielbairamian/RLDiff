@@ -6,6 +6,7 @@ DATASETS=("CIFAR10" "MNIST")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 SCHEDULES=("RL" "linear" "cosine")
+RL_FES=("IV3" "DINO")
 
 for DS in "${DATASETS[@]}"; do
     # Define dataset-specific batch size (FID calculation can usually handle larger batches)
@@ -24,11 +25,24 @@ for DS in "${DATASETS[@]}"; do
     for ORD in "${ORDERS[@]}"; do
         for BUD in "${BUDGETS[@]}"; do
             for SCHED in "${SCHEDULES[@]}"; do
+
+                if [ "$SCHED" == "RL" ]; then
+                    FE_LIST=("${RL_FES[@]}")
+                else
+                    FE_LIST=("none")
+                fi
+
+                for FE in "${FE_LIST[@]}"; do
+
+                    if [ "$SCHED" == "RL" ]; then
+                        JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}_${FE}"
+                        FE_ARG="--feature_extractor $FE"
+                    else
+                        JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}"
+                        FE_ARG=""
+                    fi
                 
-                # Job name for FID evaluation
-                JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}"
-                
-                sbatch <<EOF
+                    sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=$JOB_NAME
 #SBATCH --partition=long
@@ -51,6 +65,7 @@ python /home/mila/d/daniel.bairamian/RLDiff/FID_calculation.py \\
     --budget "$BUD" \\
     --order "$ORD" \\
     --schedule "$SCHED" \\
+    $FE_ARG \\
     --base_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets/ \\
     --base_FID_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets_FID/
 EOF
