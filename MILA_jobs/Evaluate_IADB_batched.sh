@@ -69,7 +69,7 @@ python /home/mila/d/daniel.bairamian/RLDiff/FID_calculation.py \\
     --base_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets/ \\
     --base_FID_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets_FID/
 EOF
-
+                done
             done
         done
     done
