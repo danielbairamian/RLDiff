@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define the grids for the loops
-DATASETS=("CIFAR10" "MNIST" "CelebAHQ")
+DATASETS=("CIFAR10") # "MNIST" "CelebAHQ")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 FEATURE_EXTRACTORS=("DINO" "IV3")
@@ -14,12 +14,12 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096    
-            F_DIMS=64
+            F_DIMS=32
             N_EPOCHS=2000
-            TIME_ENC="32 64 256"
-            PROJ_DIMS="512 256 128 64"
-            LAT_DIM=512
-            LAT_CHAN="8 16 32 64"
+            TIME_ENC="16 64"
+            PROJ_DIMS="128 64"
+            LAT_DIM=128
+            LAT_CHAN="32 64 128"
             ;;
 
         "CIFAR10")
@@ -27,12 +27,12 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096
-            F_DIMS=64
+            F_DIMS=32
             N_EPOCHS=2000
-            TIME_ENC="32 64 256"
-            PROJ_DIMS="512 256 128 64"
-            LAT_DIM=512
-            LAT_CHAN="8 16 32 64"
+            TIME_ENC="16 64"
+            PROJ_DIMS="128 64"
+            LAT_DIM=128
+            LAT_CHAN="32 64 128"
             ;;
 
         "CelebAHQ")
@@ -40,12 +40,12 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=256
             T_STEPS=4096
-            F_DIMS=64
+            F_DIMS=32
             N_EPOCHS=2000
-            TIME_ENC="32 64 256"
-            PROJ_DIMS="512 256 128 64"
-            LAT_DIM=512
-            LAT_CHAN="8 16 32 64 128 256"
+            TIME_ENC="16 64"
+            PROJ_DIMS="128 64"
+            LAT_DIM=128
+            LAT_CHAN="8 16 32 64 256"
             ;;
         
     esac

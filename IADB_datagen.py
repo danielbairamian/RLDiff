@@ -89,7 +89,7 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dims',            type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--order',                      type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
     parser.add_argument('--latent_dim',                 type=int,   default=512,             help='Dimensionality of the image state latent space')
-    parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[32, 64, 128, 256], help='Latent channels for the encoder')
+    parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[64, 128, 256], help='Latent channels for the encoder')
     parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
     parser.add_argument('--start_idx_offset',           type=int,   default=1,               help='Starting index offset for resuming generation to avoid corrupted images' )
     parser.add_argument('--seed',                       type=int,   default=42,              help='Random seed for reproducibility' )
