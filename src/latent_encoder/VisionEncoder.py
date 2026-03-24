@@ -39,10 +39,9 @@ class VisionEncoder(nn.Module):
         # uncomment if not using adaptive average pooling and just flattening the output of the last conv layer
         self.flattened_size = latent_channels[-1] # since we are doing adaptive average pooling to (1, 1), the spatial dimensions will be 1x1, so the flattened size is just the number of channels in the last layer
         # self.average_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.average_pool = nn.Conv2d(latent_channels[-1], latent_channels[-1], kernel_size=self.shape_before_flatten[1:], stride=1) # global pooling implemented as conv with kernel size equal to the spatial dimensions of the feature map
+        self.average_pool = nn.Conv2d(latent_channels[-1], latent_dim, kernel_size=self.shape_before_flatten[1:], stride=1) # global pooling implemented as conv with kernel size equal to the spatial dimensions of the feature map
 
         self.flatten = nn.Flatten()
-        self.projection_layer = nn.Linear(self.flattened_size, latent_dim)
 
     def encode(self, x):
         for layer in self.encoder_layers:
@@ -50,6 +49,5 @@ class VisionEncoder(nn.Module):
         # adaptive average pool to get a fixed size output regardless of input dimensions
         x = self.average_pool(x)
         x = self.flatten(x)
-        x = self.projection_layer(x)
         x = F.silu(x)
         return x
