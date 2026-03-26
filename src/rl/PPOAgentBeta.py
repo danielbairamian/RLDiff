@@ -161,16 +161,16 @@ class PPOAgent(nn.Module):
         conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
         # conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
-            self.mean_head.bias.normal_(mean_action_init, 0.1)
-            self.mean_head.weight.normal_(0, 0.1)
+            self.mean_head.bias.normal_(mean_action_init, 0.01)
+            self.mean_head.weight.normal_(0, 0.01)
 
-            self.conc_head.bias.normal_(conc_init, 0.1)
-            self.conc_head.weight.normal_(0, 0.1)
+            self.conc_head.bias.normal_(conc_init, 0.01)
+            self.conc_head.weight.normal_(0, 0.01)
 
         self.critic = nn.Linear(backbone_dim, 1)
         self.mc_layer = MonteCarloLayer(
             self.critic,
-            dropout_p=0.05, mc_samples=256,
+            dropout_p=0.1, mc_samples=512,
             attention_mode='attention', attend_mode='inputs',
             num_heads=4, embedding_size=backbone_dim // 2,
             query_mode='per_sample',
