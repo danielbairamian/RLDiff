@@ -14,11 +14,11 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=128
             MB_SIZE=128
             T_STEPS=8192    
-            F_DIMS=32
+            F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 32"
-            PROJ_DIMS="128 64"
-            LAT_DIM=64
+            TIME_ENC="64 64"
+            PROJ_DIMS="256 128"
+            LAT_DIM=128
             LAT_CHAN="8 16 32 64"
             ;;
 
@@ -27,11 +27,11 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=128
             MB_SIZE=128
             T_STEPS=8192
-            F_DIMS=32
+            F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 32"
-            PROJ_DIMS="128  64"
-            LAT_DIM=64
+            TIME_ENC="64 64"
+            PROJ_DIMS="256 128"
+            LAT_DIM=128
             LAT_CHAN="8 16 32 64"
             ;;
 
@@ -40,11 +40,11 @@ for DS in "${DATASETS[@]}"; do
             B_SIZE=64
             MB_SIZE=128
             T_STEPS=8192
-            F_DIMS=32
+            F_DIMS=64
             N_EPOCHS=2000
-            TIME_ENC="32 32"
-            PROJ_DIMS="128 64"
-            LAT_DIM=64
+            TIME_ENC="64 64"
+            PROJ_DIMS="256 128"
+            LAT_DIM=128
             LAT_CHAN="8 16 32 32 64 64"
             ;;
         

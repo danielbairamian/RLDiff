@@ -10,28 +10,28 @@ for DS in "${DATASETS[@]}"; do
     case $DS in
         "MNIST")
             B_SIZE=128
-            F_DIMS=32
-            TIME_ENC="32 32" 
-            PROJ_DIMS="128 64" 
-            LAT_DIM=64
+            F_DIMS=64
+            TIME_ENC="64 64" 
+            PROJ_DIMS="256 128" 
+            LAT_DIM=128
             LAT_CHAN="8 16 32 64" 
             ;;
 
         "CIFAR10")
             B_SIZE=128 
-            F_DIMS=32 
-            TIME_ENC="32 32"
-            PROJ_DIMS="128 64"
-            LAT_DIM=64
+            F_DIMS=64 
+            TIME_ENC="64 64"
+            PROJ_DIMS="256 128"
+            LAT_DIM=128
             LAT_CHAN="8 16 32 64"
             ;;
 
         "CelebAHQ")
             B_SIZE=32
-            F_DIMS=32 
-            TIME_ENC="32 32"
-            PROJ_DIMS="128 64"
-            LAT_DIM=64
+            F_DIMS=64 
+            TIME_ENC="64 64"
+            PROJ_DIMS="256 128"
+            LAT_DIM=128
             LAT_CHAN="8 16 32 32 64 64"
             ;;
     esac
