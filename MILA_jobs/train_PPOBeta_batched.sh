@@ -12,40 +12,40 @@ for DS in "${DATASETS[@]}"; do
         "MNIST")
             S_MULT=8
             B_SIZE=128
-            MB_SIZE=256
+            MB_SIZE=128
             T_STEPS=8192    
-            F_DIMS=64
+            F_DIMS=32
             N_EPOCHS=2000
-            TIME_ENC="32 64"
-            PROJ_DIMS="128 128"
-            LAT_DIM=128
+            TIME_ENC="32 32"
+            PROJ_DIMS="128 64"
+            LAT_DIM=64
             LAT_CHAN="8 16 32 64"
             ;;
 
         "CIFAR10")
             S_MULT=8
             B_SIZE=128
-            MB_SIZE=256
+            MB_SIZE=128
             T_STEPS=8192
-            F_DIMS=64
+            F_DIMS=32
             N_EPOCHS=2000
-            TIME_ENC="32 64"
-            PROJ_DIMS="128 128"
-            LAT_DIM=128
+            TIME_ENC="32 32"
+            PROJ_DIMS="128  64"
+            LAT_DIM=64
             LAT_CHAN="8 16 32 64"
             ;;
 
         "CelebAHQ")
             S_MULT=8
             B_SIZE=64
-            MB_SIZE=256
+            MB_SIZE=128
             T_STEPS=8192
-            F_DIMS=64
+            F_DIMS=32
             N_EPOCHS=2000
-            TIME_ENC="32 64"
-            PROJ_DIMS="128 128"
-            LAT_DIM=128
-            LAT_CHAN="8 16 32 64 64 64"
+            TIME_ENC="32 32"
+            PROJ_DIMS="128 64"
+            LAT_DIM=64
+            LAT_CHAN="8 16 32 32 64 64"
             ;;
         
     esac

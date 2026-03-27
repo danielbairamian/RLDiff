@@ -105,6 +105,9 @@ class DiffusionEnv:
             sim_matrix = torch.matmul(z_gen_norm, self.z_real_norm.T)
             topk_sim, _ = torch.topk(sim_matrix, self.k, dim=1)
             mean_topk_sim = topk_sim.mean(dim=1)
+
+            # Shift and scale the similarity to create a reward signal.
+            mean_topk_sim = mean_topk_sim - 1 # Shift to [-2, 0] range, where 0 is perfect match and -2 is worst case (opposite vectors)
             
             # Permanently cache their score
             self.episode_rewards[just_done] = mean_topk_sim
@@ -134,8 +137,8 @@ class DiffusionEnv:
         else:
             self.z_real_norm = None  # No rewards in eval mode, so no need to compute or store this
         
-        self.k = 1
-        # self.k = max(1, int(0.02 * self.x1.shape[0])) # Top 2% of the batch 
+        # self.k = 1
+        self.k = max(1, int(0.02 * self.x1.shape[0])) # Top 2% of the batch 
 
         self.x0 = torch.randn_like(self.x1).to(self.device)
         self.x0 = self.x0[:self.x1.shape[0]//self.sample_multiplier] 
