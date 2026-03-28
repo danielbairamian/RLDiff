@@ -11,8 +11,10 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from src.rl.DiffusionEnv import DiffusionEnv
+from src.rl.DiffusionRLEnv import IADBDiffusionEnv, DDIMDiffusionEnv
 from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
+
+from src.diffusion.DDIM_inference import load_ddim_wrapper
 
 @torch.no_grad()
 def generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=False, gamma=1.0, gae_lambda=1.0):
@@ -369,14 +371,15 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {device}')
 
-    parser = argparse.ArgumentParser(description='Train IADB')
+    parser = argparse.ArgumentParser(description='Train Diffusion Policy with PPO')
 
-    parser.add_argument('--dataset',              type=str,   default='CIFAR10',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
+    parser.add_argument('--dataset',              type=str,   default='CelebAHQ',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
     parser.add_argument('--batch_size',           type=int,   default=8,               help='Batch size for training')
     parser.add_argument('--budget',               type=int,   default=10,             help='Maximum number of steps per episode')
     parser.add_argument('--base_dataset_path',    type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
-    parser.add_argument('--base_logs_path',       type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/IADB/',   help='Base path for logs and checkpoints')
-    parser.add_argument('--base_path_diffusion',  type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/IADB/', help='Base path for diffusion checkpoints')
+    parser.add_argument('--base_logs_path',       type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/',   help='Base path for logs and checkpoints')
+    parser.add_argument('--base_path_diffusion',  type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/', help='Base path for diffusion checkpoints')
+    parser.add_argument('--diffusion_model',      type=str,   default='IADB',          help='Diffusion model to use: DDIM, IADB')
     parser.add_argument('--fused_dims',           type=int,   default=64,              help='Dimension of the fused state-time representation')
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
@@ -411,25 +414,46 @@ if __name__ == "__main__":
     else:
         raise ValueError("Unsupported dataset. Choose from: CIFAR10, MNIST, CelebAHQ")
 
+
     dataset_path   = args.base_dataset_path + args.dataset
     ppo_exp_suffix = f"{args.dataset}_NFE_{args.budget}_order_{args.order}_{args.feature_extractor}"
-    logs_path      = args.base_logs_path + f"tensorboard/{ppo_exp_suffix}/"
-    save_path      = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}/"
-    diffusion_path = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
+    
+    logs_path      = args.base_logs_path + args.diffusion_model + f"/tensorboard/{ppo_exp_suffix}/"
+    save_path      = args.base_logs_path + args.diffusion_model + f"/checkpoints/{ppo_exp_suffix}/"
+    diffusion_path = args.base_path_diffusion + args.diffusion_model + f"/checkpoints/{args.dataset}/"
 
     os.makedirs(save_path, exist_ok=True)
     os.makedirs(logs_path, exist_ok=True)
 
-    iadb_model = torch.load(os.path.join(diffusion_path, 'iadb_model.pth'), map_location=device).eval()
-
+    if args.diffusion_model == "IADB":
+        model = torch.load(os.path.join(diffusion_path, 'iadb_model.pth'), map_location=device).eval()
+    elif args.diffusion_model == "DDIM":
+        if args.dataset == "CIFAR10":
+            model = load_ddim_wrapper('google/ddpm-cifar10-32', device)
+        elif args.dataset == "MNIST":
+            raise ValueError("No publicly available DDIM model for MNIST. Please train your own or choose a different dataset.")
+        elif args.dataset == "CelebAHQ":
+            model = load_ddim_wrapper('google/ddpm-celebahq-256', device)
+        else:
+            raise ValueError("Unsupported dataset for DDIM. Choose from: CIFAR10, MNIST, CelebAHQ")
+        
     dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size * args.sample_multiplier)
+
+    if args.diffusion_model == "DDIM":
+        denorm_fn = lambda x: (x + 1.0) / 2.0  # Rescale from [-1, 1] to [0, 1]
+
     vision_encoder = VisionEncoder(
         input_W=info_dict['W'], input_H=info_dict['H'], input_channels=info_dict['C'],
         latent_channels=args.latent_channels, latent_dim=args.latent_dim
     )
 
-    env = DiffusionEnv(
-        dataloader=dataloader, iadb_model=iadb_model, device=device,
+    if args.diffusion_model == "IADB":
+        env_cls = IADBDiffusionEnv
+    elif args.diffusion_model == "DDIM":
+        env_cls = DDIMDiffusionEnv
+
+    env = env_cls(
+        dataloader=dataloader, model=model, device=device,
         order=args.order, budget=args.budget,
         sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn, feature_extractor=args.feature_extractor
     )

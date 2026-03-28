@@ -5,6 +5,7 @@ DATASETS=("CIFAR10") # "MNIST" "CelebAHQ")
 ORDERS=(1 2)
 BUDGETS=(10 20 30 50 100)
 FEATURE_EXTRACTORS=("DINO" "IV3")
+DIFFUSION_MODELS=("IADB" "DDIM")
 
 for DS in "${DATASETS[@]}"; do
     # Define dataset-specific hyperparameters
@@ -53,10 +54,11 @@ for DS in "${DATASETS[@]}"; do
     for FE in "${FEATURE_EXTRACTORS[@]}"; do
         for ORD in "${ORDERS[@]}"; do
             for BUD in "${BUDGETS[@]}"; do
-                
-                JOB_NAME="${DS}_${FE}_O${ORD}_B${BUD}"
-                
-                sbatch <<EOF
+                for DM in "${DIFFUSION_MODELS[@]}"; do
+
+                    JOB_NAME="${DS}_${FE}_O${ORD}_B${BUD}_D${DM}"
+
+                    sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=$JOB_NAME
 #SBATCH --partition=long
@@ -87,11 +89,12 @@ python /home/mila/d/daniel.bairamian/RLDiff/train_PPOBeta.py \\
     --latent_dim $LAT_DIM \\
     --latent_channels $LAT_CHAN \\
     --feature_extractor "$FE" \\
+    --diffusion_model "$DM" \\
     --base_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets/ \\
-    --base_logs_path /network/scratch/d/daniel.bairamian/RLDiff_data/logs/PPO/IADB/ \\
-    --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/IADB/
+    --base_logs_path /network/scratch/d/daniel.bairamian/RLDiff_data/logs/PPO/ \\
+    --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/
 EOF
-
+                done
             done
         done
     done
