@@ -437,10 +437,12 @@ if __name__ == "__main__":
         else:
             raise ValueError("Unsupported dataset for DDIM. Choose from: CIFAR10, MNIST, CelebAHQ")
         
-    dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size * args.sample_multiplier)
+    dataloader, info_dict, denorm_fn_data = load_fn(dataset_path, batch_size=args.batch_size * args.sample_multiplier)
 
     if args.diffusion_model == "DDIM":
         denorm_fn = lambda x: (x + 1.0) / 2.0  # Rescale from [-1, 1] to [0, 1]
+    else:
+        denorm_fn = denorm_fn_data
 
     vision_encoder = VisionEncoder(
         input_W=info_dict['W'], input_H=info_dict['H'], input_channels=info_dict['C'],
@@ -455,7 +457,7 @@ if __name__ == "__main__":
     env = env_cls(
         dataloader=dataloader, model=model, device=device,
         order=args.order, budget=args.budget,
-        sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn, feature_extractor=args.feature_extractor
+        sample_multiplier=args.sample_multiplier, denorm_fn=denorm_fn, denorm_fn_data=denorm_fn_data, feature_extractor=args.feature_extractor
     )
     env.reset()
 

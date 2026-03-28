@@ -19,12 +19,13 @@ class DiffusionEnv:
 
     def __init__(self, dataloader, model, device,
                  order=1, budget=10, sample_multiplier=4,
-                 denorm_fn=None, eval_mode=False, feature_extractor="DINO"):
+                 denorm_fn=None, denorm_fn_data=None, eval_mode=False, feature_extractor="DINO"):
 
         self.dataloader          = dataloader
         self.device              = device
         self.dataloader_iterator = iter(self.dataloader)
         self.denorm_fn           = denorm_fn
+        self.denorm_fn_data      = denorm_fn_data  # separate denorm for data if needed
         self.order               = order
         self.budget              = budget // self.order
         self.sample_multiplier   = sample_multiplier
@@ -66,8 +67,9 @@ class DiffusionEnv:
         raise NotImplementedError
 
     @torch.no_grad()
-    def get_features(self, x):
-        x_clean = self.denorm_fn(x)
+    def get_features(self, x, denorm_func):
+        x_clean = denorm_func(x)
+        x_clean = x_clean.clamp(0.0, 1.0)
         if x_clean.shape[1] == 1:
             x_clean = x_clean.repeat(1, 3, 1, 1)
         return self.feat_model(self.preprocess(x_clean))
@@ -93,7 +95,7 @@ class DiffusionEnv:
 
         just_done = self.dones & ~old_dones
         if just_done.any() and not self.eval_mode:
-            z_gen      = self.get_features(self.x0[just_done])
+            z_gen      = self.get_features(self.x0[just_done], self.denorm_fn)
             z_gen_norm = F.normalize(z_gen, p=2.0, dim=1)
             sim_matrix = torch.matmul(z_gen_norm, self.z_real_norm.T)
             topk_sim, _ = torch.topk(sim_matrix, self.k, dim=1)
@@ -113,7 +115,7 @@ class DiffusionEnv:
         self.x1 = x1.to(self.device)
 
         if not self.eval_mode:
-            self.z_real_norm = F.normalize(self.get_features(self.x1), p=2.0, dim=1)
+            self.z_real_norm = F.normalize(self.get_features(self.x1, self.denorm_fn_data), p=2.0, dim=1)
         else:
             self.z_real_norm = None
 
