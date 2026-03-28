@@ -56,7 +56,7 @@ for DS in "${DATASETS[@]}"; do
             for BUD in "${BUDGETS[@]}"; do
                 for DM in "${DIFFUSION_MODELS[@]}"; do
 
-                    JOB_NAME="${DS}_${FE}_O${ORD}_B${BUD}_D${DM}"
+                    JOB_NAME="${DS}_${FE}_O${ORD}_B${BUD}_DM_${DM}"
 
                     sbatch <<EOF
 #!/bin/bash
