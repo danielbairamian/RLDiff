@@ -31,8 +31,8 @@ class DDIMWrapper:
     Schedule / order variants map to DDIM as follows:
         linear_first  — uniform timestep spacing,  1 UNet call per step  (standard DDIM)
         cosine_first  — cosine timestep spacing,   1 UNet call per step
-        linear_second — uniform timestep spacing,  2 UNet calls per step (PLMS-style)
-        cosine_second — cosine timestep spacing,   2 UNet calls per step
+        linear_second — uniform timestep spacing,  2 UNet calls per step (midpoint/RK2)
+        cosine_second — cosine timestep spacing,   2 UNet calls per step (midpoint/RK2)
     """
 
     def __init__(self, pipeline: DDIMPipeline):
@@ -69,11 +69,10 @@ def _cosine_timesteps(T: int, nb_step: int) -> list[int]:
     """
     timesteps = []
     for i in range(nb_step):
-        # cosine goes 0→1 as i goes 0→nb_step-1
         cos_val = math.cos((i / (nb_step - 1)) * math.pi / 2)
         t = round(cos_val * (T - 1))
         timesteps.append(t)
-    return timesteps          # already descending (T-1 → 0)
+    return timesteps
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +92,9 @@ def _ddim_step(wrapper: DDIMWrapper,
     alpha_bar_t      = ac[t]
     alpha_bar_t_prev = ac[t_prev] if t_prev >= 0 else torch.tensor(1.0, device=x.device)
 
-    # Predicted x0
     x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
-
-    # DDIM update  (eta=0 → no stochastic term)
-    x_prev = (torch.sqrt(alpha_bar_t_prev) * x0_pred
-              + torch.sqrt(1 - alpha_bar_t_prev) * eps_pred)
+    x_prev  = (torch.sqrt(alpha_bar_t_prev) * x0_pred
+               + torch.sqrt(1 - alpha_bar_t_prev) * eps_pred)
     return x_prev
 
 
@@ -122,7 +118,7 @@ def sample_ddim_linear_first_order(wrapper: DDIMWrapper, x0: torch.Tensor,
         eps = wrapper.predict_eps(x, t_tensor)
         x   = _ddim_step(wrapper, x, t, t_prev, eps)
 
-        alpha = 1.0 - t / (wrapper.T - 1)      # IADB-equivalent alpha for logging
+        alpha = 1.0 - t / (wrapper.T - 1)
         x0_states[i + 1] = x.cpu()
         alphas[i + 1]     = alpha
 
@@ -159,8 +155,10 @@ def sample_ddim_cosine_first_order(wrapper: DDIMWrapper, x0: torch.Tensor,
 def sample_ddim_linear_second_order(wrapper: DDIMWrapper, x0: torch.Tensor,
                                     nb_step: int, return_trajectory: bool = False):
     """
-    Second-order (PLMS-style): uses the average of eps at t and eps at t_prev
-    as a corrected direction, analogous to IADB's midpoint method.
+    Second-order midpoint (RK2): evaluate eps at t_mid between t and t_prev,
+    then use that eps for the full step. Matches IADB's second-order convention
+    and is stable for any step size — unlike Heun which can blow up on large steps.
+
     Uses nb_step // 2 effective steps (2 UNet calls each) to match IADB convention.
     """
     nb_step   = nb_step // 2
@@ -172,18 +170,18 @@ def sample_ddim_linear_second_order(wrapper: DDIMWrapper, x0: torch.Tensor,
 
     x = x0.clone().to(wrapper.device)
     for i, (t, t_prev) in enumerate(zip(timesteps, timesteps[1:] + [-1])):
-        t_tensor      = torch.tensor(t,      device=wrapper.device)
-        t_prev_tensor = torch.tensor(max(t_prev, 0), device=wrapper.device)
+        t_mid = max((t + max(t_prev, 0)) // 2, 0)
 
-        # 1st call: eps at current t
-        eps_t    = wrapper.predict_eps(x, t_tensor)
-        # Intermediate step to t_prev
-        x_prev   = _ddim_step(wrapper, x, t, t_prev, eps_t)
-        # 2nd call: eps at t_prev
-        eps_prev = wrapper.predict_eps(x_prev, t_prev_tensor)
-        # Corrected step using averaged eps
-        eps_avg  = 0.5 * (eps_t + eps_prev)
-        x        = _ddim_step(wrapper, x, t, t_prev, eps_avg)
+        t_tensor     = torch.tensor(t,     device=wrapper.device)
+        t_mid_tensor = torch.tensor(t_mid, device=wrapper.device)
+
+        # 1st call: eps at t, half-step to t_mid
+        eps_t = wrapper.predict_eps(x, t_tensor)
+        x_mid = _ddim_step(wrapper, x, t, t_mid, eps_t)
+
+        # 2nd call: eps at t_mid, full step from t to t_prev
+        eps_mid = wrapper.predict_eps(x_mid, t_mid_tensor)
+        x       = _ddim_step(wrapper, x, t, t_prev, eps_mid)
 
         alpha = 1.0 - t / (wrapper.T - 1)
         x0_states[i + 1] = x.cpu()
@@ -197,6 +195,7 @@ def sample_ddim_linear_second_order(wrapper: DDIMWrapper, x0: torch.Tensor,
 @torch.no_grad()
 def sample_ddim_cosine_second_order(wrapper: DDIMWrapper, x0: torch.Tensor,
                                     nb_step: int, return_trajectory: bool = False):
+    """Cosine-spaced variant of the midpoint second-order sampler."""
     nb_step   = nb_step // 2
     timesteps = _cosine_timesteps(wrapper.T, nb_step)
     B = x0.shape[0]
@@ -206,14 +205,15 @@ def sample_ddim_cosine_second_order(wrapper: DDIMWrapper, x0: torch.Tensor,
 
     x = x0.clone().to(wrapper.device)
     for i, (t, t_prev) in enumerate(zip(timesteps, timesteps[1:] + [-1])):
-        t_tensor      = torch.tensor(t,           device=wrapper.device)
-        t_prev_tensor = torch.tensor(max(t_prev, 0), device=wrapper.device)
+        t_mid = max((t + max(t_prev, 0)) // 2, 0)
 
-        eps_t    = wrapper.predict_eps(x, t_tensor)
-        x_prev   = _ddim_step(wrapper, x, t, t_prev, eps_t)
-        eps_prev = wrapper.predict_eps(x_prev, t_prev_tensor)
-        eps_avg  = 0.5 * (eps_t + eps_prev)
-        x        = _ddim_step(wrapper, x, t, t_prev, eps_avg)
+        t_tensor     = torch.tensor(t,     device=wrapper.device)
+        t_mid_tensor = torch.tensor(t_mid, device=wrapper.device)
+
+        eps_t   = wrapper.predict_eps(x, t_tensor)
+        x_mid   = _ddim_step(wrapper, x, t, t_mid, eps_t)
+        eps_mid = wrapper.predict_eps(x_mid, t_mid_tensor)
+        x       = _ddim_step(wrapper, x, t, t_prev, eps_mid)
 
         alpha = 1.0 - t / (wrapper.T - 1)
         x0_states[i + 1] = x.cpu()
