@@ -149,115 +149,51 @@ class IADBDiffusionEnv(DiffusionEnv):
 
 
 class DDIMDiffusionEnv(DiffusionEnv):
-    """
-    DDIM-specific RL environment with support for first and second-order 
-    sampling, progress-guaranteed discretization, and numerical stability.
-    """
 
-    def _init_model(self, model):
-        """Initializes the DDIM wrapper and caches the alpha schedule."""
+    def _init_model(self, model: DDIMWrapper):
         self.ddim_wrapper = model
         self._ac = model.scheduler.alphas_cumprod.to(self.device)
         self.T   = model.T
 
     def _alpha_to_t(self, alpha: torch.Tensor) -> torch.Tensor:
-        """Maps the continuous [0, 1] alpha to discrete [T-1, 0] timesteps."""
         return ((1.0 - alpha) * (self.T - 1)).round().long().clamp(0, self.T - 1)
 
     def _ddim_step(self, x, t_cur, t_next, eps):
-        """
-        Performs a single deterministic DDIM step with static thresholding 
-        on the predicted clean image (x0) to prevent color-blowing.
-        """
         ac_cur  = self._ac[t_cur].view(-1, 1, 1, 1)
-        
-        # ac_next is 1.0 if t_next is -1, otherwise retrieved from the schedule
-        ac_next = torch.where(
-            (t_next < 0).view(-1, 1, 1, 1), 
-            torch.ones(1, device=self.device).view(-1, 1, 1, 1), 
-            self._ac[t_next.clamp(min=0)].view(-1, 1, 1, 1)
-        )
-        
-        # 1. Estimate clean image (x0)
+        ac_next = self._ac[t_next.clamp(min=0)].view(-1, 1, 1, 1)
+        ac_next = torch.where((t_next < 0).view(-1, 1, 1, 1), torch.ones_like(ac_next), ac_next)
         x0_pred = (x - torch.sqrt(1.0 - ac_cur) * eps) / torch.sqrt(ac_cur)
-        
-        # 2. Static Thresholding: Clamp to [-1, 1] to maintain numerical stability
-        x0_pred = x0_pred.clamp(-1.0, 1.0)
-        
-        # 3. Compute x_next using the clamped x0 prediction
         return torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
 
     def _denoise_step(self, new_alpha: torch.Tensor) -> torch.Tensor:
-        """
-        Executes the denoising step using a mask to skip terminal or 
-        redundant computations.
-        """
-        # Determine active samples that are not yet finished
-        active = ~self.dones
-        x_out  = self.x0.clone()
-
-        if not active.any():
-            return x_out
-
-        # Slice state to active samples only
-        x_active = self.x0[active]
-        t_cur    = self._alpha_to_t(self.alpha[active])
-        
-        # Guarantee at least one discrete step forward if not already finished
-        t_next   = self._alpha_to_t(new_alpha[active]) - 1
+        t_cur  = self._alpha_to_t(self.alpha)
+        t_next = self._alpha_to_t(new_alpha) - 1
 
         if self.order == 1:
-            # First order: standard DDIM prediction
-            eps   = self.ddim_wrapper.predict_eps(x_active, t_cur)
-            x_new = self._ddim_step(x_active, t_cur, t_next, eps)
+            eps = self.ddim_wrapper.predict_eps(self.x0, t_cur)
+            return self._ddim_step(self.x0, t_cur, t_next, eps)
 
         elif self.order == 2:
-            # Second order (Midpoint/PLMS style): uses two UNet calls
-            # 1. Proposal step to t_next
-            eps_cur = self.ddim_wrapper.predict_eps(x_active, t_cur)
-            x_tmp   = self._ddim_step(x_active, t_cur, t_next, eps_cur)
-            
-            # 2. Correction step at t_next (clamped to 0 for the UNet input)
-            eps_next = self.ddim_wrapper.predict_eps(x_tmp, t_next.clamp(min=0))
-            eps_avg  = 0.5 * (eps_cur + eps_next)
-            x_new    = self._ddim_step(x_active, t_cur, t_next, eps_avg)
+            # Midpoint (RK2) — mirrors IADB's second-order exactly.
+            #
+            # Heun (predictor-corrector) evaluates eps at t_next, which requires
+            # extrapolating x all the way to the end of the step. With small fixed
+            # steps (standalone sampler) this is fine, but with variable RL actions
+            # the jump can be large and the extrapolated x_tmp is off-distribution,
+            # giving a bad corrector eps that blows up over many steps.
+            #
+            # Midpoint evaluates eps at t_mid (halfway), where x_mid is a much
+            # shorter extrapolation and stays on-distribution for any step size.
+            #
+            #   IADB analogue:
+            #     mid_alpha = (alpha_start + alpha_end) / 2
+            #     d1 = model(x, alpha_start)
+            #     x_mid = x + d1 * (mid_alpha - alpha_start)
+            #     d2 = model(x_mid, alpha_mid)
+            #     x_new = x + d2 * (alpha_end - alpha_start)
 
-        # Update only the active samples in the batch
-        x_out[active] = x_new
-        return x_out
-
-# class DDIMDiffusionEnv(DiffusionEnv):
-
-#     def _init_model(self, model: DDIMWrapper):
-#         self.ddim_wrapper = model
-#         self._ac = model.scheduler.alphas_cumprod.to(self.device)
-#         self.T   = model.T
-
-#     def _alpha_to_t(self, alpha: torch.Tensor) -> torch.Tensor:
-#         return ((1.0 - alpha) * (self.T - 1)).round().long().clamp(0, self.T - 1)
-
-#     def _ddim_step(self, x, t_cur, t_next, eps):
-#         ac_cur  = self._ac[t_cur].view(-1, 1, 1, 1)
-#         ac_next = self._ac[t_next.clamp(min=0)].view(-1, 1, 1, 1)
-#         ac_next = torch.where((t_next < 0).view(-1, 1, 1, 1), torch.ones_like(ac_next), ac_next)
-#         x0_pred = (x - torch.sqrt(1.0 - ac_cur) * eps) / torch.sqrt(ac_cur)
-#         x0_pred = x0_pred.clamp(-1.0, 1.0)
-#         return torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
-
-#     def _denoise_step(self, new_alpha: torch.Tensor) -> torch.Tensor:
-#         t_cur    = self._alpha_to_t(self.alpha)
-#         t_target = self._alpha_to_t(new_alpha)
-#         t_next   = torch.where(new_alpha >= 1.0 - 1e-8, torch.full_like(t_target, -1), t_target)
-#         no_step_non_terminal = (t_next == t_cur) & (t_cur > 0)
-#         t_next = torch.where(no_step_non_terminal, t_cur - 1, t_next)
-
-#         if self.order == 1:
-#             eps = self.ddim_wrapper.predict_eps(self.x0, t_cur)
-#             return self._ddim_step(self.x0, t_cur, t_next, eps)
-
-#         elif self.order == 2:
-#             eps_cur  = self.ddim_wrapper.predict_eps(self.x0, t_cur)
-#             x_tmp    = self._ddim_step(self.x0, t_cur, t_next, eps_cur)
-#             eps_next = self.ddim_wrapper.predict_eps(x_tmp, t_next.clamp(min=0))
-#             eps_avg  = 0.5 * (eps_cur + eps_next)
-#             return self._ddim_step(self.x0, t_cur, t_next, eps_avg)
+            t_mid    = ((t_cur.float() + t_next.float()) / 2).round().long().clamp(min=0)
+            eps_cur  = self.ddim_wrapper.predict_eps(self.x0, t_cur)
+            x_mid    = self._ddim_step(self.x0, t_cur, t_mid, eps_cur)   # half step
+            eps_mid  = self.ddim_wrapper.predict_eps(x_mid, t_mid)
+            return self._ddim_step(self.x0, t_cur, t_next, eps_mid)       # full step with midpoint eps
