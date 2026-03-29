@@ -163,7 +163,9 @@ class DDIMDiffusionEnv(DiffusionEnv):
         ac_next = self._ac[t_next.clamp(min=0)].view(-1, 1, 1, 1)
         ac_next = torch.where((t_next < 0).view(-1, 1, 1, 1), torch.ones_like(ac_next), ac_next)
         x0_pred = (x - torch.sqrt(1.0 - ac_cur) * eps) / torch.sqrt(ac_cur)
-        return torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
+        pred = torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
+        pred = pred.clamp(-1.0, 1.0)
+        return pred
 
     def _denoise_step(self, new_alpha: torch.Tensor) -> torch.Tensor:
         # Only run the UNet on samples that are not yet done.
