@@ -14,9 +14,11 @@ from tqdm import tqdm
 from utils.dataloaders import CIFAR_dataloader, CelebAHQ_dataloader, MNIST_dataloader
 import os
 
-from src.rl.DiffusionEnv import DiffusionEnv
+from src.rl.DiffusionRLEnv import IADBDiffusionEnv, DDIMDiffusionEnv
 from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
 from src.diffusion.iadb_samplers import sample_iadb_linear_first_order, sample_iadb_cosine_first_order, sample_iadb_linear_second_order, sample_iadb_cosine_second_order
+from src.diffusion.DDIM_inference import sample_ddim_linear_first_order, sample_ddim_cosine_first_order, sample_ddim_linear_second_order, sample_ddim_cosine_second_order
+from src.diffusion.DDIM_inference import load_ddim_wrapper
 
 import glob
 
@@ -32,22 +34,22 @@ def get_last_index(directory):
     indices = [int(os.path.basename(f).split('_')[1].split('.')[0]) for f in files]
     return max(indices)
 
-def sampling_strategy_IADB(iadb_model, nb_step, order, schedule="linear", ppo_agent=None, env=None):
+def sampling_strategy(model, nb_step, order, schedule="linear", ppo_agent=None, env=None, first_order_linear_fn=None, first_order_cosine_fn=None, second_order_linear_fn=None, second_order_cosine_fn=None):
     if schedule == "linear":
         env.reset()
         if order == 1:
-            x1, trajectory_dict = sample_iadb_linear_first_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            x1, trajectory_dict = first_order_linear_fn(model, env.x0, nb_step, return_trajectory=True)
             return x1, trajectory_dict
         elif order == 2:
-            x1, trajectory_dict = sample_iadb_linear_second_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            x1, trajectory_dict = second_order_linear_fn(model, env.x0, nb_step, return_trajectory=True)
             return x1, trajectory_dict
     elif schedule == "cosine":
         env.reset()
         if order == 1:
-            x1, trajectory_dict = sample_iadb_cosine_first_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            x1, trajectory_dict = first_order_cosine_fn(model, env.x0, nb_step, return_trajectory=True)
             return x1, trajectory_dict
         elif order == 2:
-            x1, trajectory_dict = sample_iadb_cosine_second_order(iadb_model, env.x0, nb_step, return_trajectory=True)
+            x1, trajectory_dict = second_order_cosine_fn(model, env.x0, nb_step, return_trajectory=True)
             return x1, trajectory_dict
     elif schedule == "RL":
         if ppo_agent is None or env is None:
@@ -69,6 +71,24 @@ def sampling_strategy_IADB(iadb_model, nb_step, order, schedule="linear", ppo_ag
     else:
         raise ValueError("Unsupported schedule type. Choose from: linear, cosine, RL")
 
+def sampling_strategy_IADB(iadb_model, nb_step, order, schedule="linear", ppo_agent=None, env=None):
+    return sampling_strategy(
+        model=iadb_model, nb_step=nb_step, order=order, schedule=schedule, ppo_agent=ppo_agent, env=env,
+        first_order_linear_fn=sample_iadb_linear_first_order,
+        first_order_cosine_fn=sample_iadb_cosine_first_order,
+        second_order_linear_fn=sample_iadb_linear_second_order,
+        second_order_cosine_fn=sample_iadb_cosine_second_order
+    )
+
+def sampling_strategy_DDIM(ddim_wrapper, nb_step, order, schedule="linear", ppo_agent=None, env=None):
+    return sampling_strategy(
+        model=ddim_wrapper, nb_step=nb_step, order=order, schedule=schedule, ppo_agent=ppo_agent, env=env,
+        first_order_linear_fn=sample_ddim_linear_first_order,
+        first_order_cosine_fn=sample_ddim_cosine_first_order,
+        second_order_linear_fn=sample_ddim_linear_second_order,
+        second_order_cosine_fn=sample_ddim_cosine_second_order
+    )
+
 
 if __name__ == "__main__":
 
@@ -77,24 +97,24 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Generate IADB dataset")
     
-    parser.add_argument('--dataset',                    type=str,   default='CIFAR10',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
-    parser.add_argument('--batch_size',                 type=int,   default=16,               help='Batch size for training')
-    parser.add_argument('--budget',                     type=int,   default=10,             help='Maximum number of steps per episode')
+    parser.add_argument('--dataset',                    type=str,   default='CIFAR10',                                                          help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
+    parser.add_argument('--batch_size',                 type=int,   default=16,                                                                 help='Batch size for training')
+    parser.add_argument('--budget',                     type=int,   default=10,                                                                 help='Maximum number of steps per episode')
     parser.add_argument('--base_dataset_path',          type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
-    parser.add_argument('--base_FID_dataset_path',      type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets_FID/',        help='Base path for datasets')
-    parser.add_argument('--base_logs_path',             type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/',   help='Base path for logs and checkpoints')
-    parser.add_argument('--base_path_diffusion',        type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/', help='Base path for diffusion checkpoints')
-    parser.add_argument('--diffusion_model',      type=str,   default='IADB',          help='Diffusion model to use: DDIM, IADB')
-    parser.add_argument('--fused_dims',                 type=int,   default=64,              help='Dimension of the fused state-time representation')
-    parser.add_argument('--time_encoder_dims',          type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
-    parser.add_argument('--projection_dims',            type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
-    parser.add_argument('--order',                      type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
-    parser.add_argument('--latent_dim',                 type=int,   default=512,             help='Dimensionality of the image state latent space')
-    parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[64, 128, 256], help='Latent channels for the encoder')
-    parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
-    parser.add_argument('--start_idx_offset',           type=int,   default=1,               help='Starting index offset for resuming generation to avoid corrupted images' )
-    parser.add_argument('--seed',                       type=int,   default=42,              help='Random seed for reproducibility' )
-    parser.add_argument('--feature_extractor',          type=str,   default="DINO",          help='Feature extractor to use: IV3, DINO')
+    parser.add_argument('--base_FID_dataset_path',      type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets_FID/',    help='Base path for datasets')
+    parser.add_argument('--base_logs_path',             type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/PPO/',        help='Base path for logs and checkpoints')
+    parser.add_argument('--base_path_diffusion',        type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/logs/diffusion/',  help='Base path for diffusion checkpoints')
+    parser.add_argument('--diffusion_model',            type=str,   default='DDIM',                                                             help='Diffusion model to use: DDIM, IADB')
+    parser.add_argument('--fused_dims',                 type=int,   default=64,                                                                 help='Dimension of the fused state-time representation')
+    parser.add_argument('--time_encoder_dims',          type=int,   nargs='+',   default=[32, 64],                                              help='Output dims for each layer in the time encoder')
+    parser.add_argument('--projection_dims',            type=int,   nargs='+', default=[256, 128],                                              help='Output dims for each layer in the projection encoder')
+    parser.add_argument('--order',                      type=int,   default=2,                                                                  help='Order of the method (1=linear, 2=cosine)')
+    parser.add_argument('--latent_dim',                 type=int,   default=512,                                                                help='Dimensionality of the image state latent space')
+    parser.add_argument('--latent_channels',            type=int,   nargs='+', default=[32, 64, 128],                                          help='Latent channels for the encoder')
+    parser.add_argument('--schedule',                   type=str,   default='RL',                                                               help='Schedule for noise levels: linear or cosine or RL')
+    parser.add_argument('--start_idx_offset',           type=int,   default=1,                                                                  help='Starting index offset for resuming generation to avoid corrupted images' )
+    parser.add_argument('--seed',                       type=int,   default=42,                                                                 help='Random seed for reproducibility' )
+    parser.add_argument('--feature_extractor',          type=str,   default="IV3",                                                             help='Feature extractor to use: IV3, DINO')
 
 
     args = parser.parse_args()
@@ -111,40 +131,59 @@ if __name__ == "__main__":
 
     dataset_path     = args.base_dataset_path + args.dataset
     ppo_exp_suffix   = f"{args.dataset}_NFE_{args.budget}_order_{args.order}"
+    
     # data_log_suffix= f"{args.dataset}_NFE_{args.budget}_order_{args.order}_{args.feature_extractor}_schedule_{args.schedule}"
     data_log_suffix  = ppo_exp_suffix 
     if args.schedule == "RL":
         data_log_suffix += f"_{args.feature_extractor}"
     data_log_suffix += f"_schedule_{args.schedule}"
 
-    data_save_path   = args.base_FID_dataset_path + f"FID_Images/{data_log_suffix}/"
-    traj_save_path   = args.base_FID_dataset_path + f"FID_Trajectories/{data_log_suffix}/"
-    diffusion_path   = args.base_path_diffusion + f"checkpoints/{args.dataset}/"
+    data_save_path   = args.base_FID_dataset_path + args.diffusion_model + f"/FID_Images/{data_log_suffix}/"
+    traj_save_path   = args.base_FID_dataset_path + args.diffusion_model + f"/FID_Trajectories/{data_log_suffix}/"
+    diffusion_path   = args.base_path_diffusion + args.diffusion_model + f"/checkpoints/{args.dataset}/"
     
-    ppo_save_path    = args.base_logs_path + f"checkpoints/{ppo_exp_suffix}_{args.feature_extractor}/"
+    ppo_save_path    = args.base_logs_path + args.diffusion_model + f"/checkpoints/{ppo_exp_suffix}_{args.feature_extractor}/"
 
     os.makedirs(data_save_path, exist_ok=True)
     os.makedirs(traj_save_path, exist_ok=True)
 
-    iadb_model = torch.load(os.path.join(diffusion_path, 'iadb_model.pth'), map_location=device).eval()
-
+    # iadb_model = torch.load(os.path.join(diffusion_path, 'iadb_model.pth'), map_location=device).eval()
+    if args.diffusion_model == "IADB":
+        model = torch.load(os.path.join(diffusion_path, 'iadb_model.pth'), map_location=device).eval()
+    elif args.diffusion_model == "DDIM":
+        if args.dataset == "CIFAR10":
+            model = load_ddim_wrapper('google/ddpm-cifar10-32', device)
+        elif args.dataset == "MNIST":
+            raise ValueError("No publicly available DDIM model for MNIST. Please train your own or choose a different dataset.")
+        elif args.dataset == "CelebAHQ":
+            model = load_ddim_wrapper('google/ddpm-celebahq-256', device)
+        else:
+            raise ValueError("Unsupported dataset for DDIM. Choose from: CIFAR10, MNIST, CelebAHQ")
 
     # Load dataloader with batch size 2 just to get info dict for initializing the vision encoder, the actual dataloader with the correct batch size will be loaded inside the environment
-    dataloader, info_dict, denorm_fn = load_fn(dataset_path, batch_size=args.batch_size, num_workers=1)
+    dataloader, info_dict, denorm_fn_data = load_fn(dataset_path, batch_size=args.batch_size, num_workers=1)
+    
+    if args.diffusion_model == "DDIM":
+        denorm_fn = lambda x: (x + 1.0) / 2.0  # Rescale from [-1, 1] to [0, 1]
+    else:
+        denorm_fn = denorm_fn_data
+
     vision_encoder = VisionEncoder(
         input_W=info_dict['W'], input_H=info_dict['H'], input_channels=info_dict['C'],
         latent_channels=args.latent_channels, latent_dim=args.latent_dim
     )
 
-    env = DiffusionEnv(
-        dataloader=dataloader, iadb_model=iadb_model, device=device,
-        order=args.order, budget=args.budget,
-        sample_multiplier=1, denorm_fn=denorm_fn, eval_mode=True, feature_extractor=args.feature_extractor
-    )
-    
-    torch.manual_seed(args.seed)
-    env.reset()
+    if args.diffusion_model == "IADB":
+        env_cls = IADBDiffusionEnv
+    elif args.diffusion_model == "DDIM":
+        env_cls = DDIMDiffusionEnv
 
+    env = env_cls(
+        dataloader=dataloader, model=model, device=device,
+        order=args.order, budget=args.budget,
+        sample_multiplier=1, denorm_fn=denorm_fn, denorm_fn_data=denorm_fn_data, feature_extractor=args.feature_extractor
+    )
+    env.reset()
 
     ppo_agent = PPOAgent(
         vision_encoder=vision_encoder,
@@ -154,7 +193,7 @@ if __name__ == "__main__":
         projection_dims=args.projection_dims,
         action_dim=1,
         mean_action_init=(1.0 / env.budget),
-        concentration_init=4.0
+        concentration_init=8.0
     ).to(device)
 
     checkpoint_file = os.path.join(ppo_save_path, 'ppo_checkpoint.pth')
@@ -193,7 +232,10 @@ if __name__ == "__main__":
     with torch.no_grad():
         while current_idx < TOTAL_SAMPLES:
             # x1 = sample_iadb_linear_first_order(iadb_model, x0, nb_step=args.budget)
-            x1, trajectory_dict = sampling_strategy_IADB(iadb_model, nb_step=args.budget, order=args.order, schedule=args.schedule, ppo_agent=ppo_agent, env=env)
+            if args.diffusion_model == "IADB":
+                x1, trajectory_dict = sampling_strategy_IADB(model, nb_step=args.budget, order=args.order, schedule=args.schedule, ppo_agent=ppo_agent, env=env)
+            elif args.diffusion_model == "DDIM":
+                x1, trajectory_dict = sampling_strategy_DDIM(model, nb_step=args.budget, order=args.order, schedule=args.schedule, ppo_agent=ppo_agent, env=env)
 
             mask = (trajectory_dict['alphas'] == 1.0)  # [trajectory, batch_size]
             steps = mask.float().argmax(dim=0)          # [batch_size] — first True along trajectory dim

@@ -166,34 +166,58 @@ class DDIMDiffusionEnv(DiffusionEnv):
         return torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
 
     def _denoise_step(self, new_alpha: torch.Tensor) -> torch.Tensor:
-        t_cur  = self._alpha_to_t(self.alpha)
-        t_next = self._alpha_to_t(new_alpha) - 1
+        # Only run the UNet on samples that are not yet done.
+        # For IADB this is implicit (delta_alpha=0 → no update), but for DDIM
+        # the step always moves x regardless, so we must gate explicitly.
+        active = ~self.dones
+        x_out  = self.x0.clone()
+
+        if not active.any():
+            return x_out
+
+        x_a       = self.x0[active]
+        t_cur     = self._alpha_to_t(self.alpha[active])
+        t_next    = self._alpha_to_t(new_alpha[active]) - 1
 
         if self.order == 1:
-            eps = self.ddim_wrapper.predict_eps(self.x0, t_cur)
-            return self._ddim_step(self.x0, t_cur, t_next, eps)
+            eps   = self.ddim_wrapper.predict_eps(x_a, t_cur)
+            x_new = self._ddim_step(x_a, t_cur, t_next, eps)
 
         elif self.order == 2:
             # Midpoint (RK2) — mirrors IADB's second-order exactly.
             #
-            # Heun (predictor-corrector) evaluates eps at t_next, which requires
-            # extrapolating x all the way to the end of the step. With small fixed
-            # steps (standalone sampler) this is fine, but with variable RL actions
-            # the jump can be large and the extrapolated x_tmp is off-distribution,
-            # giving a bad corrector eps that blows up over many steps.
-            #
-            # Midpoint evaluates eps at t_mid (halfway), where x_mid is a much
-            # shorter extrapolation and stays on-distribution for any step size.
-            #
-            #   IADB analogue:
-            #     mid_alpha = (alpha_start + alpha_end) / 2
-            #     d1 = model(x, alpha_start)
-            #     x_mid = x + d1 * (mid_alpha - alpha_start)
-            #     d2 = model(x_mid, alpha_mid)
-            #     x_new = x + d2 * (alpha_end - alpha_start)
+            # Require a gap of at least 2 between t_cur and t_next so that
+            # t_mid is strictly between the two endpoints. If the gap is only 1
+            # (e.g. t_cur=1, t_next=0) a midpoint would collapse to an endpoint
+            # and the second UNet call would be redundant/wrong — fall back to
+            # first-order for those samples.
 
-            t_mid    = ((t_cur.float() + t_next.float()) / 2).round().long().clamp(min=0)
-            eps_cur  = self.ddim_wrapper.predict_eps(self.x0, t_cur)
-            x_mid    = self._ddim_step(self.x0, t_cur, t_mid, eps_cur)   # half step
-            eps_mid  = self.ddim_wrapper.predict_eps(x_mid, t_mid)
-            return self._ddim_step(self.x0, t_cur, t_next, eps_mid)       # full step with midpoint eps
+            t_mid     = ((t_cur.float() + t_next.clamp(min=0).float()) / 2).round().long().clamp(min=0)
+            gap       = t_cur - t_next.clamp(min=0)          # (N,) number of discrete steps
+            use_mid   = gap >= 2                              # True → midpoint; False → 1st order
+
+            # --- samples with sufficient gap: midpoint (RK2) ---
+            x_new = torch.empty_like(x_a)
+
+            if use_mid.any():
+                x_m      = x_a[use_mid]
+                tc_m     = t_cur[use_mid]
+                tn_m     = t_next[use_mid]
+                tmid_m   = t_mid[use_mid]
+
+                eps_cur  = self.ddim_wrapper.predict_eps(x_m, tc_m)
+                x_mid    = self._ddim_step(x_m, tc_m, tmid_m, eps_cur)  # half step
+                eps_mid  = self.ddim_wrapper.predict_eps(x_mid, tmid_m)
+                x_new[use_mid] = self._ddim_step(x_m, tc_m, tn_m, eps_mid)  # full step
+
+            # --- samples too close to terminal: first order fallback ---
+            if (~use_mid).any():
+                x_f      = x_a[~use_mid]
+                tc_f     = t_cur[~use_mid]
+                tn_f     = t_next[~use_mid]
+
+                eps      = self.ddim_wrapper.predict_eps(x_f, tc_f)
+                x_new[~use_mid] = self._ddim_step(x_f, tc_f, tn_f, eps)
+
+        x_out[active] = x_new
+        return x_out
