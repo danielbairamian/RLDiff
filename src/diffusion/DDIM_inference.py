@@ -93,6 +93,7 @@ def _ddim_step(wrapper: DDIMWrapper,
     alpha_bar_t_prev = ac[t_prev] if t_prev >= 0 else torch.tensor(1.0, device=x.device)
 
     x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
+    x0_pred = x0_pred.clamp(-1.0, 1.0)  # static thresholding: x1 lives in [-1,1]
     x_prev  = (torch.sqrt(alpha_bar_t_prev) * x0_pred
                + torch.sqrt(1 - alpha_bar_t_prev) * eps_pred)
     return x_prev

@@ -154,6 +154,7 @@ class DDIMDiffusionEnv(DiffusionEnv):
         self.ddim_wrapper = model
         self._ac = model.scheduler.alphas_cumprod.to(self.device)
         self.T   = model.T
+        self.t_state = None   # explicit DDIM timestep state — set in reset()
 
     def _alpha_to_t(self, alpha: torch.Tensor) -> torch.Tensor:
         return ((1.0 - alpha) * (self.T - 1)).round().long().clamp(0, self.T - 1)
@@ -163,63 +164,86 @@ class DDIMDiffusionEnv(DiffusionEnv):
         ac_next = self._ac[t_next.clamp(min=0)].view(-1, 1, 1, 1)
         ac_next = torch.where((t_next < 0).view(-1, 1, 1, 1), torch.ones_like(ac_next), ac_next)
         x0_pred = (x - torch.sqrt(1.0 - ac_cur) * eps) / torch.sqrt(ac_cur)
-        pred = torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
-        pred = pred.clamp(-1.0, 1.0)
-        return pred
+        x0_pred = x0_pred.clamp(-1.0, 1.0)  # clip to valid range for stability
+        return torch.sqrt(ac_next) * x0_pred + torch.sqrt(1.0 - ac_next) * eps
 
     def _denoise_step(self, new_alpha: torch.Tensor) -> torch.Tensor:
-        # Only run the UNet on samples that are not yet done.
-        # For IADB this is implicit (delta_alpha=0 → no update), but for DDIM
-        # the step always moves x regardless, so we must gate explicitly.
+        # Gate on active (non-terminated) samples.
+        # For IADB, zero action → delta_alpha=0 → x unchanged implicitly.
+        # For DDIM, _ddim_step always moves x, so we must gate explicitly AND
+        # guard against tiny actions that don't produce a discrete timestep change.
         active = ~self.dones
         x_out  = self.x0.clone()
 
         if not active.any():
             return x_out
 
-        x_a       = self.x0[active]
-        t_cur     = self._alpha_to_t(self.alpha[active])
-        t_next    = self._alpha_to_t(new_alpha[active]) - 1
+        x_a    = self.x0[active]
+        t_cur  = self.t_state[active]                        # ground-truth DDIM position
+        t_next = self._alpha_to_t(new_alpha[active]) - 1    # target after action
+
+        # If the action is so small that it doesn't advance a single discrete
+        # timestep, skip the UNet entirely — keeps x and t_state in sync.
+        # This mirrors IADB where delta_alpha=0 is a no-op.
+        makes_progress = t_next < t_cur                      # t decreases = progress
+        x_new  = x_a.clone()
+
+        if not makes_progress.any():
+            # No sample moves — write back unchanged and return early
+            x_out[active] = x_new
+            return x_out
+
+        # Only run the UNet on active samples that actually make progress
+        prog   = makes_progress
+        x_p    = x_a[prog]
+        tc_p   = t_cur[prog]
+        tn_p   = t_next[prog]
 
         if self.order == 1:
-            eps   = self.ddim_wrapper.predict_eps(x_a, t_cur)
-            x_new = self._ddim_step(x_a, t_cur, t_next, eps)
+            eps              = self.ddim_wrapper.predict_eps(x_p, tc_p)
+            x_new[prog]      = self._ddim_step(x_p, tc_p, tn_p, eps)
 
         elif self.order == 2:
-            # Midpoint (RK2) — mirrors IADB's second-order exactly.
-            #
-            # Require a gap of at least 2 between t_cur and t_next so that
-            # t_mid is strictly between the two endpoints. If the gap is only 1
-            # (e.g. t_cur=1, t_next=0) a midpoint would collapse to an endpoint
-            # and the second UNet call would be redundant/wrong — fall back to
-            # first-order for those samples.
+            # Midpoint (RK2): evaluate eps at t_mid (halfway) for stability
+            # with variable RL step sizes. Falls back to first-order when the
+            # gap is only 1 (t_mid would collapse onto an endpoint).
+            gap     = tc_p - tn_p.clamp(min=0)
+            use_mid = gap >= 2
 
-            t_mid     = ((t_cur.float() + t_next.clamp(min=0).float()) / 2).round().long().clamp(min=0)
-            gap       = t_cur - t_next.clamp(min=0)          # (N,) number of discrete steps
-            use_mid   = gap >= 2                              # True → midpoint; False → 1st order
-
-            # --- samples with sufficient gap: midpoint (RK2) ---
-            x_new = torch.empty_like(x_a)
+            x_step = torch.empty_like(x_p)
 
             if use_mid.any():
-                x_m      = x_a[use_mid]
-                tc_m     = t_cur[use_mid]
-                tn_m     = t_next[use_mid]
-                tmid_m   = t_mid[use_mid]
+                x_m    = x_p[use_mid];  tc_m = tc_p[use_mid];  tn_m = tn_p[use_mid]
+                tmid_m = ((tc_m.float() + tn_m.clamp(min=0).float()) / 2).round().long().clamp(min=0)
 
-                eps_cur  = self.ddim_wrapper.predict_eps(x_m, tc_m)
-                x_mid    = self._ddim_step(x_m, tc_m, tmid_m, eps_cur)  # half step
-                eps_mid  = self.ddim_wrapper.predict_eps(x_mid, tmid_m)
-                x_new[use_mid] = self._ddim_step(x_m, tc_m, tn_m, eps_mid)  # full step
+                eps_cur            = self.ddim_wrapper.predict_eps(x_m, tc_m)
+                x_mid              = self._ddim_step(x_m, tc_m, tmid_m, eps_cur)
+                eps_mid            = self.ddim_wrapper.predict_eps(x_mid, tmid_m)
+                x_step[use_mid]    = self._ddim_step(x_m, tc_m, tn_m, eps_mid)
 
-            # --- samples too close to terminal: first order fallback ---
             if (~use_mid).any():
-                x_f      = x_a[~use_mid]
-                tc_f     = t_cur[~use_mid]
-                tn_f     = t_next[~use_mid]
+                x_f    = x_p[~use_mid];  tc_f = tc_p[~use_mid];  tn_f = tn_p[~use_mid]
+                eps                = self.ddim_wrapper.predict_eps(x_f, tc_f)
+                x_step[~use_mid]   = self._ddim_step(x_f, tc_f, tn_f, eps)
 
-                eps      = self.ddim_wrapper.predict_eps(x_f, tc_f)
-                x_new[~use_mid] = self._ddim_step(x_f, tc_f, tn_f, eps)
+            x_new[prog] = x_step
 
         x_out[active] = x_new
+
+        # Update t_state for samples that made progress — this is the ground truth
+        # DDIM position and must stay in sync with the actual noise level of x.
+        # Using alpha alone to reconstruct t would drift when actions are small.
+        new_t = self.t_state.clone()
+        active_indices        = active.nonzero(as_tuple=True)[0]
+        prog_indices          = active_indices[prog]
+        new_t[prog_indices]   = tn_p.clamp(min=-1)   # -1 = terminal (fully clean)
+        self.t_state          = new_t
+
         return x_out
+
+    def reset(self):
+        state = super().reset()
+        # Initialise t_state to T-1 (pure noise) for all samples
+        self.t_state = torch.full((self.x0.shape[0],), self.T - 1,
+                                  dtype=torch.long, device=self.device)
+        return state
