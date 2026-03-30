@@ -50,8 +50,9 @@ if __name__ == "__main__":
     parser.add_argument('--base_dataset_path',          type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
     parser.add_argument('--base_FID_dataset_path',      type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets_FID/',        help='Base path for datasets')
     parser.add_argument('--order',                      type=int,   default=2,               help='Order of the method (1=linear, 2=cosine)')
-    parser.add_argument('--schedule',                   type=str,   default='cosine',        help='Schedule for noise levels: linear or cosine or RL')
+    parser.add_argument('--schedule',                   type=str,   default='RL',        help='Schedule for noise levels: linear or cosine or RL')
     parser.add_argument('--feature_extractor',          type=str,   default="IV3",          help='Feature extractor to use: IV3, DINO')
+    parser.add_argument('--diffusion_model',            type=str,   default="IADB",          help='Diffusion model to use: IADB, DDIM')
 
     args = parser.parse_args()
 
@@ -71,7 +72,7 @@ if __name__ == "__main__":
         data_log_suffix += f"_{args.feature_extractor}"
     data_log_suffix += f"_schedule_{args.schedule}"
 
-    data_save_path   = args.base_FID_dataset_path + f"FID_Images/{data_log_suffix}/"
+    data_save_path   = args.base_FID_dataset_path + args.diffusion_model + f"/FID_Images/{data_log_suffix}/"
 
     real_dataloader, info_dict, denorm_fn= load_fn(dataset_path, batch_size=args.batch_size, train=True, drop_last=False)
     fake_dataloader = FID_dataloader(data_save_path, batch_size=args.batch_size)
