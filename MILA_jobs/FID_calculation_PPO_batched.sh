@@ -38,7 +38,7 @@ for DS in "${DATASETS[@]}"; do
                     for FE in "${FE_LIST[@]}"; do
 
                         if [ "$SCHED" == "RL" ]; then
-                            JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}_${FE}"
+                            JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}_${FE}_DM_${DM}"
                             FE_ARG="--feature_extractor $FE"
                         else
                             JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}"

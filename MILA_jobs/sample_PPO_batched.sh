@@ -87,8 +87,8 @@ python /home/mila/d/daniel.bairamian/RLDiff/PPO_datagen.py \\
     --diffusion_model "$DM" \\
     --base_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets/ \\
     --base_FID_dataset_path /network/scratch/d/daniel.bairamian/RLDiff_data/datasets_FID/ \\
-    --base_logs_path /network/scratch/d/daniel.bairamian/RLDiff_data/logs/PPO/IADB/ \\
-    --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/IADB/
+    --base_logs_path /network/scratch/d/daniel.bairamian/RLDiff_data/logs/PPO/ \\
+    --base_path_diffusion /network/scratch/d/daniel.bairamian/RLDiff_data/logs/diffusion/
 EOF
                     done
                 done
