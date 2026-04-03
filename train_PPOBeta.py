@@ -144,7 +144,8 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256, gamma=1.0, gae_lambda
 
     while collected_steps < target_steps:
         eps = torch.rand(1).item()
-        deterministic = eps < epsilon_greedy
+        # deterministic = eps < epsilon_greedy
+        deterministic = False  # --- IGNORE ---
         rollout, debug_dict = generate_rollout(env, ppo_agent, gamma=gamma, gae_lambda=gae_lambda, deterministic=deterministic)
 
         chunk_size = rollout['states'].shape[0]

@@ -51,6 +51,9 @@ KAPPA_MIN = 2.005
 RAW_MEAN_MIN = -8.0 
 RAW_MEAN_MAX = 8.0
 
+RAW_CONC_MIN = -20.0
+RAW_CONC_MAX = 10.0
+
 class NeRFEmbedder(nn.Module):
     """
     NeRF-style sinusoidal positional encoding.
@@ -165,8 +168,8 @@ class PPOAgent(nn.Module):
         self.conc_head = nn.Linear(backbone_dim, action_dim)
 
         mean_action_init = np.log(mean_action_init / (1 - mean_action_init))  # Inverse sigmoid to get initial raw_mean
-        conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
-        # conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
+        # conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
+        conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
             self.mean_head.bias.normal_(mean_action_init, 0.01)
             self.mean_head.weight.normal_(0, 0.01)
@@ -198,8 +201,12 @@ class PPOAgent(nn.Module):
         raw_mean_clamped = raw_mean + (raw_mean.clamp(RAW_MEAN_MIN, RAW_MEAN_MAX) - raw_mean).detach()
         mu = torch.sigmoid(raw_mean_clamped)
 
-        kappa = F.softplus(raw_conc) + KAPPA_MIN
+        # kappa = F.softplus(raw_conc) + KAPPA_MIN
         # kappa = torch.exp(raw_conc) + KAPPA_MIN
+        raw_kappa_clamped = raw_conc + (raw_conc.clamp(RAW_CONC_MIN, RAW_CONC_MAX) - raw_conc).detach()
+        kappa_clamped = torch.exp(raw_kappa_clamped) + KAPPA_MIN
+        kappa = kappa_clamped  # Use clamped kappa for stability, but still get gradients through the original raw_conc
+
 
         alpha = 1.0 + mu * (kappa - 2.0)
         beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
