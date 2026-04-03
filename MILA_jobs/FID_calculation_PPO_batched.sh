@@ -41,7 +41,7 @@ for DS in "${DATASETS[@]}"; do
                             JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}_${FE}_DM_${DM}"
                             FE_ARG="--feature_extractor $FE"
                         else
-                            JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}"
+                            JOB_NAME="FID_${DS}_O${ORD}_B${BUD}_${SCHED}_DM_${DM}"
                             FE_ARG=""
                         fi
                     
