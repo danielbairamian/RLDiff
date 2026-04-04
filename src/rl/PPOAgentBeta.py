@@ -215,7 +215,7 @@ class PPOAgent(nn.Module):
     def forward(self, state, alpha_t, steps, deterministic=False):
         state_enc = self.vision_encoder.encode(state)
         combined  = self.backbone(state_enc, alpha_t, steps)
-        combined_v = self.backbone_v(state_enc.detach(), alpha_t, steps)
+        combined_v = self.backbone_v(state_enc, alpha_t, steps)
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
@@ -245,7 +245,7 @@ class PPOAgent(nn.Module):
         actions = actions.clamp(1e-6, 1.0 - 1e-6)
 
         combined = self.backbone(state_enc, alpha_t, steps)
-        combined_v = self.backbone_v(state_enc.detach(), alpha_t, steps)
+        combined_v = self.backbone_v(state_enc, alpha_t, steps)
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(combined)
         dist  = Beta(conc_alpha, conc_beta)
