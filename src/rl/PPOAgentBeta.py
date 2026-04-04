@@ -194,12 +194,14 @@ class PPOAgent(nn.Module):
         # When raw_mean = -100: forward uses -5.0, backward gets full gradient back
         # This is the key difference vs clamping mu: d(clamp)/d(raw_mean) = 1 straight-through
         # vs d(sigmoid_clamp)/d(raw_mean) = sigmoid_grad ≈ 0 when saturated
-        raw_mean_clamped = raw_mean + (raw_mean.clamp(RAW_MEAN_MIN, RAW_MEAN_MAX) - raw_mean).detach()
+        # raw_mean_clamped = raw_mean + (raw_mean.clamp(RAW_MEAN_MIN, RAW_MEAN_MAX) - raw_mean).detach()
+        raw_mean_clamped = raw_mean
         mu = torch.sigmoid(raw_mean_clamped)
 
         # kappa = F.softplus(raw_conc) + KAPPA_MIN
         # kappa = torch.exp(raw_conc) + KAPPA_MIN
-        raw_kappa_clamped = raw_conc + (raw_conc.clamp(RAW_CONC_MIN, RAW_CONC_MAX) - raw_conc).detach()
+        # raw_kappa_clamped = raw_conc + (raw_conc.clamp(RAW_CONC_MIN, RAW_CONC_MAX) - raw_conc).detach()
+        raw_kappa_clamped = raw_conc
         kappa_clamped = torch.exp(raw_kappa_clamped) + KAPPA_MIN
         kappa = kappa_clamped  # Use clamped kappa for stability, but still get gradients through the original raw_conc
 
