@@ -157,15 +157,15 @@ def ppo_buffer_generator(env, ppo_agent, target_steps=256, gamma=1.0, gae_lambda
         for key in rollout_chunks[0].keys()
     }
 
-    # full_rollout['advantages'] = (
-    #     (full_rollout['advantages'] - full_rollout['advantages'].mean())
-    #     / (full_rollout['advantages'].std() + 1e-4)
-    # )
-
     full_rollout['advantages'] = (
         (full_rollout['advantages'] - full_rollout['advantages'].mean())
-        / (full_rollout['advantages'].std() + 1.0)
+        / (full_rollout['advantages'].std() + 1e-8)
     )
+
+    # full_rollout['advantages'] = (
+    #     (full_rollout['advantages'] - full_rollout['advantages'].mean())
+    #     / (full_rollout['advantages'].std() + 1.0)
+    # )
 
 
     return full_rollout, debug_dict
@@ -187,7 +187,6 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None, ppo_clip
             minibatch['states'], minibatch['alphas'], minibatch['steps'], minibatch['actions']
         )
         kl        = new_logprobs - minibatch['logprobs']
-        approx_kl = minibatch['logprobs'] - new_logprobs
         ratio     = torch.exp(kl.clip(-10, 10))
         surrogate1 = ratio * minibatch['advantages']
         surrogate2 = torch.clamp(ratio, 1 - ppo_clip_epsilon, 1 + ppo_clip_epsilon) * minibatch['advantages']
@@ -209,7 +208,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None, ppo_clip
         concentration_kappa = net_dict['kappa']  # higher kappa = more confident = lower entropy
 
 
-        yield policy_loss, value_loss, entropy.mean(), approx_kl.mean(), concentration_kappa.mean()
+        yield policy_loss, value_loss, entropy.mean(), -kl.mean(), concentration_kappa.mean()
 
 
 def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, save_path=None):
@@ -252,6 +251,9 @@ def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, 
             for key in rollout_buffer.keys():
                 rollout_buffer[key] = rollout_buffer[key][perm]
 
+            epoch_kl_accum = 0.0
+            minibatch_count = 0
+
             for policy_loss, value_loss, entropy, kl, concentration_kappa in ppo_update(
                 ppo_agent, device, ppo_args['minibatch_size'], full_rollout=rollout_buffer, ppo_clip_epsilon=ppo_args['ppo_clip_epsilon']
             ):
@@ -269,14 +271,16 @@ def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, 
                 epoch_entropy     += (entropy.item()     - epoch_entropy)     / update_count
                 epoch_total_loss  += (loss.item()        - epoch_total_loss)  / update_count
                 epoch_kl          += (kl.item()          - epoch_kl)          / update_count
-                epoch_kappa       += (concentration_kappa.item() - epoch_kappa) / update_count  
+                epoch_kappa       += (concentration_kappa.item() - epoch_kappa) / update_count
 
-            #     # early stopping if KL divergence is too high, to prevent destructive updates
-            #     if kl.item() > KL_TERMINATION_THRESHOLD:
-            #         KL_terminated = True    
-            #         break
-            # if KL_terminated:
-            #     break
+                minibatch_count += 1
+                epoch_kl_accum += (kl.item() - epoch_kl_accum) / minibatch_count
+
+                if epoch_kl_accum > ppo_args['kl_termination_value']:
+                    KL_terminated = True    
+                    break
+            if KL_terminated:
+                break
 
         test_rollout, debug_dict_test = None, None
         if epoch % 100 == 0:
@@ -402,7 +406,7 @@ if __name__ == "__main__":
     parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.2,             help='Clipping epsilon for PPO updates')
     parser.add_argument('--gae_lambda',           type=float, default=1.0,            help='GAE lambda for advantage estimation')
     parser.add_argument('--gamma',                type=float, default=1.0,             help='Discount factor for rewards')
-    parser.add_argument('--kl_termination_value', type=float, default=0.1,             help='KL divergence threshold for early stopping of PPO updates')
+    parser.add_argument('--kl_termination_value', type=float, default=0.02,             help='KL divergence threshold for early stopping of PPO updates')
     parser.add_argument('--seed',                 type=int,   default=42,              help='Random seed for reproducibility')
     args = parser.parse_args()
 

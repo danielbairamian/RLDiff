@@ -164,8 +164,8 @@ class PPOAgent(nn.Module):
         self.conc_head = nn.Linear(backbone_dim, action_dim)
 
         mean_action_init = np.log(mean_action_init / (1 - mean_action_init))  # Inverse sigmoid to get initial raw_mean
-        # conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
-        conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
+        conc_init = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)  # Inverse of exp to get initial raw_conc
+        # conc_init = np.log(concentration_init - KAPPA_MIN)  # Inverse of exp to get initial raw_conc
         with torch.no_grad():
             self.mean_head.bias.normal_(mean_action_init, 0.01)
             self.mean_head.weight.normal_(0, 0.01)
@@ -202,7 +202,8 @@ class PPOAgent(nn.Module):
         # kappa = torch.exp(raw_conc) + KAPPA_MIN
         # raw_kappa_clamped = raw_conc + (raw_conc.clamp(RAW_CONC_MIN, RAW_CONC_MAX) - raw_conc).detach()
         raw_kappa_clamped = raw_conc
-        kappa_clamped = torch.exp(raw_kappa_clamped) + KAPPA_MIN
+        # kappa_clamped = torch.exp(raw_kappa_clamped) + KAPPA_MIN
+        kappa_clamped = F.softplus(raw_kappa_clamped) + KAPPA_MIN
         kappa = kappa_clamped  # Use clamped kappa for stability, but still get gradients through the original raw_conc
 
 
