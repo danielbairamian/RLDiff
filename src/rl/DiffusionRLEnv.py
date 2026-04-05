@@ -99,7 +99,7 @@ class DiffusionEnv:
             z_gen_norm = F.normalize(z_gen, p=2.0, dim=1)
             sim_matrix = torch.matmul(z_gen_norm, self.z_real_norm.T)
             topk_sim, _ = torch.topk(sim_matrix, self.k, dim=1)
-            self.episode_rewards[just_done] = topk_sim.mean(dim=1) - 1
+            self.episode_rewards[just_done] = topk_sim.mean(dim=1)
 
         rewards = self.episode_rewards * self.dones.float()
         return {'alpha': self.alpha, 'steps': self.steps, 'x0': self.x0}, rewards, self.dones
