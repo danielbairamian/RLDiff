@@ -227,8 +227,8 @@ class PPOAgent(nn.Module):
         # value = self.critic(combined)
 
         if deterministic:
-            # action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
-            action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            action = conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
+            # action = net_dict['mu']  # conc_alpha / (conc_alpha + conc_beta)  # mean action, not mode — more stable for early training
         else:
             action = dist.sample()
 
