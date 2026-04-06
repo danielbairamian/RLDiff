@@ -260,7 +260,7 @@ def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, 
                 # concentration_kappa = torch.log(concentration_kappa)  # log-space penalty for stability
                 concentration_kappa = torch.log(1.0 + concentration_kappa) # softplus penalty
                 optimizer.zero_grad()
-                loss = policy_loss + value_loss + (ppo_args['entropy_coef'] * concentration_kappa) # - entropy_coef * ppo_args['entropy_coef']
+                loss = policy_loss + value_loss  - entropy * ppo_args['entropy_coef'] # + (ppo_args['entropy_coef'] * concentration_kappa)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(ppo_agent.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -395,7 +395,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
     parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
     parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef',         type=float, default=0.0,             help='Entropy coefficient for PPO')
+    parser.add_argument('--entropy_coef',         type=float, default=1e-4,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=64,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs',       type=int,   default=4,               help='PPO epochs per update')
@@ -405,7 +405,7 @@ if __name__ == "__main__":
     parser.add_argument('--latent_channels',      type=int,   nargs='+', default=[32, 64, 128], help='Latent channels for the encoder')
     parser.add_argument('--feature_extractor',    type=str,   default="IV3",          help='Feature extractor to use: IV3, DINO')
     parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.1,             help='Clipping epsilon for PPO updates')
-    parser.add_argument('--gae_lambda',           type=float, default=1.0,            help='GAE lambda for advantage estimation')
+    parser.add_argument('--gae_lambda',           type=float, default=0.97,            help='GAE lambda for advantage estimation')
     parser.add_argument('--gamma',                type=float, default=1.0,             help='Discount factor for rewards')
     parser.add_argument('--kl_termination_value', type=float, default=0.02,             help='KL divergence threshold for early stopping of PPO updates')
     parser.add_argument('--seed',                 type=int,   default=42,              help='Random seed for reproducibility')
@@ -478,7 +478,7 @@ if __name__ == "__main__":
         projection_dims=args.projection_dims,
         action_dim=1,
         mean_action_init=(1.0 / env.budget),
-        concentration_init=8.0
+        concentration_init=4.0
     ).to(device)
 
     ppo_args = {

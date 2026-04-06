@@ -119,7 +119,8 @@ class DiffusionEnv:
         else:
             self.z_real_norm = None
 
-        self.k  = max(1, int(0.02 * self.x1.shape[0]))
+        # self.k  = max(1, int(0.02 * self.x1.shape[0]))
+        self.k = 1
         self.x0 = torch.randn_like(self.x1)[:self.x1.shape[0] // self.sample_multiplier]
 
         self.alpha           = torch.zeros(self.x0.shape[0], device=self.device)

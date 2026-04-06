@@ -16,7 +16,8 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 # A single head outputs 2 * action_dim values, chunked into (raw_mean, raw_conc).
 #
 #   μ     = sigmoid(raw_mean)                    — Beta mode, ∈ (0, 1)
-#   κ     = exp(raw_conc) + KAPPA_MIN            — total concentration α+β
+#   κ     = exp(raw_conc) + KAPPA_MIN            — total concentration α+β  [soft=False]
+#   κ     = softplus(raw_conc) + KAPPA_MIN       — total concentration α+β  [soft=True]
 #   α     = 1 + μ · (κ − 2)
 #   β     = 1 + (1 − μ) · (κ − 2)
 #
@@ -26,18 +27,18 @@ from src.latent_encoder.VisionEncoder import VisionEncoder
 #   α + β = κ                                    — concentration is explicit
 #   α, β  > 1 always                             — unimodal Beta guaranteed
 #
-# Why exp for concentration (not softplus):
-#   - Exp gives true log-space parameterization: raw_conc = log(κ − κ_min).
-#     κ = 10 → 100 takes the same optimizer step as κ = 100 → 1000.
-#   - For budget=100, actions ~ 0.01: need κ ~ 10000 for tight distributions.
-#     softplus needs raw_conc ~ 10000 to reach that; exp needs raw_conc ~ 9.2.
-#   - RAW_CONC_MAX=10 → κ_max ≈ 22000, covers budget range 5–100 comfortably.
+# soft=False (exp):
+#   - True log-space parameterization: equal optimizer steps → multiplicative κ changes.
+#   - Required for budget=100 where κ ~ 10000 is needed for tight distributions.
+#     exp needs raw_conc ~ 9.2; softplus would need raw_conc ~ 10000.
+#   - STE clamp prevents exp explosion while keeping straight-through gradients.
+#   - conc_init: raw_conc = log(κ_init - KAPPA_MIN)
 #
-# STE clamp on raw_conc:
-#   - Forward: clamps raw_conc to [RAW_CONC_MIN, RAW_CONC_MAX] for numerical safety.
-#   - Backward: straight-through gradient (d/d(raw_conc) = 1 always).
-#   - This prevents exp explosion without killing gradients when the network
-#     saturates against the ceiling.
+# soft=True (softplus):
+#   - Smoother, more stable gradients. Practically equivalent to exp for κ < ~100.
+#   - Suitable for budget=5–20 where κ ~ 50–200 suffices.
+#   - Cannot realistically reach κ > ~1000 from normal network outputs.
+#   - conc_init: raw_conc = log(exp(κ_init - KAPPA_MIN) - 1)  [softplus inverse]
 #
 # KAPPA_MIN = 2.005: floor on total concentration.
 #   Guarantees κ − 2 ≥ 0.005 > 0, so α, β > 1 strictly.
@@ -93,8 +94,7 @@ class Backbone_Encoder(nn.Module):
             )
             input_dim = output_dim
 
-        # self.fused_latent = nn.Linear(state_dim + 2, fused_dims)
-        self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)  # state and time inputs interact multiplicatively before the nonlinearity
+        self.fused_latent = nn.Bilinear(state_dim, 2, fused_dims)
         self.projection_encoder = nn.Sequential()
         input_dim = fused_dims + time_encoder_dims[-1] + state_dim + 2 + self.nerf_embedder.out_dim_per_scalar * 2
 
@@ -117,7 +117,6 @@ class Backbone_Encoder(nn.Module):
         for layer in self.time_encoder:
             time_encoding = layer(time_encoding)
 
-        #  fused = self.fused_latent(torch.cat([state, time_inputs], dim=-1))
         fused = self.fused_latent(state, time_inputs)
         fused = F.silu(fused)
 
@@ -143,10 +142,12 @@ class PPOAgent(nn.Module):
         act_max: float = 1.0,
         mean_action_init: float = 0.5,
         concentration_init: float = 4.0,
+        soft: bool = True,  
     ):
         super(PPOAgent, self).__init__()
 
         self.action_dim = action_dim
+        self.soft = soft
 
         self.register_buffer('act_min', torch.tensor(act_min, dtype=torch.float32))
         self.register_buffer('act_max', torch.tensor(act_max, dtype=torch.float32))
@@ -159,7 +160,13 @@ class PPOAgent(nn.Module):
         self.conc_head = nn.Linear(backbone_dim, action_dim)
 
         mean_action_init_raw = np.log(mean_action_init / (1 - mean_action_init))  # inverse sigmoid
-        conc_init_raw = np.log(concentration_init - KAPPA_MIN)                    # inverse of exp + KAPPA_MIN
+
+        if soft:
+            # inverse of softplus(x) = log(exp(x) - 1)
+            conc_init_raw = np.log(np.exp(concentration_init - KAPPA_MIN) - 1)
+        else:
+            # inverse of exp(x) + KAPPA_MIN → log(κ_init - KAPPA_MIN)
+            conc_init_raw = np.log(concentration_init - KAPPA_MIN)
 
         with torch.no_grad():
             self.mean_head.bias.normal_(mean_action_init_raw, 0.01)
@@ -187,11 +194,13 @@ class PPOAgent(nn.Module):
 
         mu = torch.sigmoid(raw_mean)
 
-        # STE clamp: forward is numerically safe, backward is straight-through (grad = 1)
-        # This allows the network to saturate against the ceiling without killing gradients,
-        # which matters for budget=100 where κ needs to be large.
-        raw_conc_clamped = raw_conc + (raw_conc.clamp(RAW_CONC_MIN, RAW_CONC_MAX) - raw_conc).detach()
-        kappa = torch.exp(raw_conc_clamped) + KAPPA_MIN
+        if self.soft:
+            kappa = F.softplus(raw_conc) + KAPPA_MIN
+        else:
+            # STE clamp: forward is numerically safe, backward is straight-through (grad = 1).
+            # Prevents exp explosion at high budgets without killing gradients.
+            raw_conc_clamped = raw_conc + (raw_conc.clamp(RAW_CONC_MIN, RAW_CONC_MAX) - raw_conc).detach()
+            kappa = torch.exp(raw_conc_clamped) + KAPPA_MIN
 
         alpha = 1.0 + mu * (kappa - 2.0)
         beta  = 1.0 + (1.0 - mu) * (kappa - 2.0)
