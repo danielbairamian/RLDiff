@@ -55,7 +55,7 @@ def sampling_strategy(model, nb_step, order, schedule="linear", ppo_agent=None, 
         if ppo_agent is None or env is None:
             raise ValueError("PPO agent and environment must be provided for RL-based sampling")
         # no need to call env.reset(), generate_rollout calls it
-        _, debug_dict = generate_rollout(env, ppo_agent, deterministic=False, return_trajectory=True)
+        _, debug_dict = generate_rollout(env, ppo_agent, deterministic=True, return_trajectory=True)
         states = debug_dict['states']  # shape (T, B, C, H, W)
         final_states = debug_dict['final_x0s']  # shape (B, C, H, W)
         states = torch.cat((states, final_states.unsqueeze(0)), dim=0)  # shape (T+1, B, C, H, W)
