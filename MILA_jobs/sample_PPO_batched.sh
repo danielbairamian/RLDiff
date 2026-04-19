@@ -12,8 +12,8 @@ for DS in "${DATASETS[@]}"; do
         "MNIST")
             B_SIZE=128
             F_DIMS=64
-            TIME_ENC="64 64" 
-            PROJ_DIMS="256 128" 
+            TIME_ENC="32 64" 
+            PROJ_DIMS="256 128 64" 
             LAT_DIM=128
             LAT_CHAN="8 16 32 64" 
             ;;
@@ -21,8 +21,8 @@ for DS in "${DATASETS[@]}"; do
         "CIFAR10")
             B_SIZE=128 
             F_DIMS=64 
-            TIME_ENC="64 64"
-            PROJ_DIMS="256 128"
+            TIME_ENC="32 64"
+            PROJ_DIMS="256 128 64"
             LAT_DIM=128
             LAT_CHAN="8 16 32 64"
             ;;
@@ -30,8 +30,8 @@ for DS in "${DATASETS[@]}"; do
         "CelebAHQ")
             B_SIZE=32
             F_DIMS=64 
-            TIME_ENC="64 64"
-            PROJ_DIMS="256 128"
+            TIME_ENC="32 64"
+            PROJ_DIMS="256 128 64"
             LAT_DIM=128
             LAT_CHAN="8 16 32 32 64 64"
             ;;
