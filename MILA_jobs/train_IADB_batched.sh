@@ -7,7 +7,7 @@ for DS in "${DATASETS[@]}"; do
     # Define dataset-specific hyperparameters, architectures, and partitions
     case $DS in
         "CelebAHQ")
-            PARTITION="unkillable"
+            PARTITION="main"
             B_SIZE=64
             N_EPOCHS=200
             BLOCK_OUT="32 64 128 256 512 512"
@@ -16,7 +16,7 @@ for DS in "${DATASETS[@]}"; do
             ;;
 
         "CIFAR10")
-            PARTITION="main"
+            PARTITION="long"
             B_SIZE=128
             N_EPOCHS=1000
             BLOCK_OUT="32 64 128 128 256 512"
