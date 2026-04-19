@@ -9,3 +9,7 @@ ssh -L 9999:localhost:6006 mila
 
 module --quiet load anaconda/3
 conda activate RLDiff
+
+
+
+rsync --progress -raz -e "ssh -p 2222" datasets/ daniel.bairamian@login.server.mila.quebec:/network/scratch/d/daniel.bairamian/RLDiff_data/datasets
