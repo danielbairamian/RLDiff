@@ -8,7 +8,7 @@ for DS in "${DATASETS[@]}"; do
     case $DS in
         "CelebAHQ")
             PARTITION="main"
-            B_SIZE=64
+            B_SIZE=32
             N_EPOCHS=200
             BLOCK_OUT="32 64 128 256 512 512"
             UP_BLOCKS="UpBlock2D AttnUpBlock2D UpBlock2D UpBlock2D UpBlock2D UpBlock2D"
@@ -18,7 +18,7 @@ for DS in "${DATASETS[@]}"; do
         "CIFAR10")
             PARTITION="long"
             B_SIZE=128
-            N_EPOCHS=1000
+            N_EPOCHS=2000
             BLOCK_OUT="32 64 128 128 256 512"
             UP_BLOCKS="UpBlock2D AttnUpBlock2D UpBlock2D UpBlock2D UpBlock2D UpBlock2D"
             DOWN_BLOCKS="DownBlock2D DownBlock2D DownBlock2D DownBlock2D AttnDownBlock2D DownBlock2D"
@@ -27,7 +27,7 @@ for DS in "${DATASETS[@]}"; do
         "MNIST")
             PARTITION="long"
             B_SIZE=256
-            N_EPOCHS=1000
+            N_EPOCHS=2000
             BLOCK_OUT="32 32 64 64 128"
             UP_BLOCKS="UpBlock2D AttnUpBlock2D UpBlock2D UpBlock2D UpBlock2D"
             DOWN_BLOCKS="DownBlock2D DownBlock2D DownBlock2D AttnDownBlock2D DownBlock2D"
