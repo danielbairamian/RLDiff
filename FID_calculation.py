@@ -74,7 +74,7 @@ if __name__ == "__main__":
 
     data_save_path   = args.base_FID_dataset_path + args.diffusion_model + f"/FID_Images/{data_log_suffix}/"
 
-    real_dataloader, info_dict, denorm_fn= load_fn(dataset_path, batch_size=args.batch_size, train=True, drop_last=False)
+    real_dataloader, info_dict, denorm_fn= load_fn(dataset_path, batch_size=args.batch_size, drop_last=False)
     fake_dataloader = FID_dataloader(data_save_path, batch_size=args.batch_size)
 
     print("Calculating FID...")
