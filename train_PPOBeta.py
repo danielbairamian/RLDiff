@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from src.rl.DiffusionRLEnv import IADBDiffusionEnv, DDIMDiffusionEnv
-from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
+from src.rl.PPOAgentBeta_FILM import PPOAgent, VisionEncoder
 
 from src.diffusion.DDIM_inference import load_ddim_wrapper
 

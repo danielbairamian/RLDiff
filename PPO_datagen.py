@@ -15,7 +15,7 @@ from utils.dataloaders import CIFAR_dataloader, CelebAHQ_dataloader, MNIST_datal
 import os
 
 from src.rl.DiffusionRLEnv import IADBDiffusionEnv, DDIMDiffusionEnv
-from src.rl.PPOAgentBeta import PPOAgent, VisionEncoder
+from src.rl.PPOAgentBeta_FILM import PPOAgent, VisionEncoder
 from src.diffusion.iadb_samplers import sample_iadb_linear_first_order, sample_iadb_cosine_first_order, sample_iadb_linear_second_order, sample_iadb_cosine_second_order
 from src.diffusion.DDIM_inference import sample_ddim_linear_first_order, sample_ddim_cosine_first_order, sample_ddim_linear_second_order, sample_ddim_cosine_second_order
 from src.diffusion.DDIM_inference import load_ddim_wrapper
