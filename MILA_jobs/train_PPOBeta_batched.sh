@@ -16,7 +16,7 @@ for DS in "${DATASETS[@]}"; do
             MB_SIZE=128
             T_STEPS=4096    
             F_DIMS=512
-            N_EPOCHS=1000
+            N_EPOCHS=2000
             TIME_ENC="128 256"
             PROJ_DIMS="512 256 128"
             LAT_DIM=256
@@ -29,7 +29,7 @@ for DS in "${DATASETS[@]}"; do
             MB_SIZE=128
             T_STEPS=4096
             F_DIMS=512
-            N_EPOCHS=1000
+            N_EPOCHS=2000
             TIME_ENC="128 256"
             PROJ_DIMS="512 256 128"
             LAT_DIM=256
@@ -65,7 +65,7 @@ for DS in "${DATASETS[@]}"; do
 #SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --time=48:00:00
+#SBATCH --time=100:00:00
 #SBATCH --requeue
 #SBATCH -o /network/scratch/d/daniel.bairamian/RLDiff_data/SLURM_DUMP/${JOB_NAME}-%j.out
 
