@@ -200,7 +200,7 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None, ppo_clip
         value_loss_unclipped = (v_pred - v_target) ** 2
         v_clipped            = v_old + (v_pred - v_old).clamp(-ppo_clip_epsilon, ppo_clip_epsilon)
         value_loss_clipped   = (v_clipped - v_target) ** 2
-        value_loss           = torch.max(value_loss_unclipped, value_loss_clipped).mean()
+        value_loss           =  0.5 *torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
 
         # entropy surrogate loss directly on net_dict's kappa
@@ -214,6 +214,11 @@ def ppo_update(ppo_agent, device, minibatch_size=64, full_rollout=None, ppo_clip
 def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, save_path=None):
 
     optimizer = torch.optim.AdamW(ppo_agent.parameters(), lr=ppo_args['lr'], weight_decay=ppo_args['weight_decay'])
+
+    if ppo_args['lr_min'] > 0:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=ppo_args['num_epochs'])
+    else:
+        scheduler = None
 
     logger = SummaryWriter(logs_path)
 
@@ -282,6 +287,11 @@ def train_PPO(env, ppo_agent, device, ppo_args, denorm_fn=None, logs_path=None, 
             if KL_terminated:
                 # break
                 pass
+        
+        # Update the learning rate if a scheduler is defined
+        if scheduler is not None:
+            scheduler.step()
+            logger.add_scalar('Stats/Learning Rate', optimizer.param_groups[0]['lr'], epoch)
 
         test_rollout, debug_dict_test = None, None
         if epoch % 100 == 0:
@@ -382,7 +392,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Train Diffusion Policy with PPO')
 
-    parser.add_argument('--dataset',              type=str,   default='CelebAHQ',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
+    parser.add_argument('--dataset',              type=str,   default='CIFAR10',       help='Dataset to use: CIFAR10, MNIST, CelebAHQ')
     parser.add_argument('--batch_size',           type=int,   default=8,               help='Batch size for training')
     parser.add_argument('--budget',               type=int,   default=10,             help='Maximum number of steps per episode')
     parser.add_argument('--base_dataset_path',    type=str,   default='/Users/danielbairamian/Desktop/RLDiffusion_data/datasets/',        help='Base path for datasets')
@@ -393,9 +403,10 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
+    parser.add_argument('--lr',                   type=float, default=3e-4,            help='Learning rate for optimizer')
+    parser.add_argument('--lr_min',               type=float, default=1e-5,              help='Minimum learning rate for optimizer (-1 = no decay)')
     parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
-    parser.add_argument('--entropy_coef',         type=float, default=1e-4,             help='Entropy coefficient for PPO')
+    parser.add_argument('--entropy_coef',         type=float, default=1e-3,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=64,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
     parser.add_argument('--num_ppo_epochs',       type=int,   default=4,               help='PPO epochs per update')
@@ -404,7 +415,7 @@ if __name__ == "__main__":
     parser.add_argument('--latent_dim',           type=int,   default=512,             help='Dimensionality of the image state latent space')
     parser.add_argument('--latent_channels',      type=int,   nargs='+', default=[32, 64, 128], help='Latent channels for the encoder')
     parser.add_argument('--feature_extractor',    type=str,   default="IV3",          help='Feature extractor to use: IV3, DINO')
-    parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.1,             help='Clipping epsilon for PPO updates')
+    parser.add_argument('--ppo_clip_epsilon',     type=float, default=0.2,             help='Clipping epsilon for PPO updates')
     parser.add_argument('--gae_lambda',           type=float, default=1.0,            help='GAE lambda for advantage estimation')
     parser.add_argument('--gamma',                type=float, default=1.0,             help='Discount factor for rewards')
     parser.add_argument('--kl_termination_value', type=float, default=0.02,             help='KL divergence threshold for early stopping of PPO updates')
@@ -481,12 +492,20 @@ if __name__ == "__main__":
         concentration_init=4.0
     ).to(device)
 
+
+    # override gamma
+    # Set the GAE lambda based on the order and budget
+    # ex: if order=1 and budget=10, then gae_lambda = 1 - (1/10) = 0.9
+    # ex: if order=2 and budget=20, then gae_lambda = 1 - (2/20) = 0.9
+    args.gae_lambda = 1.0 - (args.order / args.budget)
+    
     ppo_args = {
         'num_epochs': args.num_epochs,
         'target_steps': args.target_steps,
         'minibatch_size': args.minibatch_size,
         'num_ppo_epochs': args.num_ppo_epochs,
         'lr': args.lr,
+        'lr_min': args.lr_min,
         'weight_decay': args.weight_decay,
         'entropy_coef': args.entropy_coef,
         'gamma': args.gamma,

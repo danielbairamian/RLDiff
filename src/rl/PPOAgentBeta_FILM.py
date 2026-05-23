@@ -7,7 +7,7 @@ from torch.distributions import Beta
 import numpy as np
 
 from src.MonteCarloLayer import MonteCarloLayer
-from src.latent_encoder.VisionEncoder import VisionEncoder
+from src.latent_encoder.VisionEncoder_Res import VisionEncoder
 
 
 # ---------------------------------------------------------------------------
@@ -123,19 +123,16 @@ class AdaLN(nn.Module):
 # ---------------------------------------------------------------------------
 # Backbone_Encoder  (shared trunk)
 # ---------------------------------------------------------------------------
-# Time encoding — separate paths for alpha and steps:
-#   alpha and steps have different semantics (continuous ratio vs integer count)
-#   and different natural frequency structures. Sharing a single NeRF embedder
-#   and encoder forces both through identical frequency bases and weight matrices.
-#   Separate NeRF embedders + separate MLPs let each signal develop its own
-#   representation before being merged into a joint time_enc.
+# Time encoding:
+#   alpha and steps are concatenated after their respective NeRF embeddings
+#   and passed through a single time_encoder MLP. A single MLP is sufficient
+#   because both signals need to interact before conditioning the state — 
+#   separating them into two MLPs then merging adds parameters without benefit.
 #
-#   alpha_enc : NeRF(alpha, L=10) → alpha_encoder MLP → (time_encoder_dims[-1],)
-#   steps_enc : NeRF(steps, L=6)  → steps_encoder MLP → (time_encoder_dims[-1],)
-#   time_enc  : cat[alpha_enc, steps_enc] → time_merge Linear+SiLU → (time_encoder_dims[-1],)
-#
-#   alpha uses L=10 (fine-grained ratio in [0,1], benefits from high frequencies).
+#   alpha uses L=10 (continuous ratio in [0,1], benefits from high frequencies).
 #   steps uses L=6  (coarser integer count, lower frequencies sufficient).
+#
+#   time_enc : cat[NeRF(alpha, L=10), NeRF(steps, L=6)] → time_encoder MLP → (time_encoder_dims[-1],)
 #
 # Cross-modal fusion — AdaLN:
 #   AdaLN(state_enc, time_enc) → state_mod
@@ -143,8 +140,10 @@ class AdaLN(nn.Module):
 #   stable distribution regardless of vision encoder output scale.
 #
 # Fusion bottleneck:
-#   cat[state_mod, time_enc, state_enc] → Linear(fused_dims) + SiLU
-#   Compresses the redundant concatenation into fused_dims before the trunk.
+#   cat[state_mod, time_enc] → Linear(fused_dims) + SiLU
+#   state_mod already encodes state via AdaLN, so concatenating raw state
+#   again is redundant — it would give the optimizer three correlated views
+#   of the same information and inflate the bottleneck unnecessarily.
 # ---------------------------------------------------------------------------
 
 class Backbone_Encoder(nn.Module):
@@ -157,29 +156,21 @@ class Backbone_Encoder(nn.Module):
     ):
         super().__init__()
 
-        # --- separate time encoders ---
-        self.nerf_alpha = NeRFEmbedder(L=10)   # 20D
-        self.nerf_steps = NeRFEmbedder(L=10)   # 20D — same L, let the encoder learn frequency importance
+        # --- time encoders ---
+        self.nerf_alpha = NeRFEmbedder(L=10)  # 20D — fine-grained continuous ratio
+        self.nerf_steps = NeRFEmbedder(L=10)   # 20D — coarser integer count
 
-        self.alpha_encoder = _build_mlp(self.nerf_alpha.out_dim, time_encoder_dims)
-        self.steps_encoder = _build_mlp(self.nerf_steps.out_dim, time_encoder_dims)
-
-        branch_dim   = time_encoder_dims[-1]
+        time_in_dim = self.nerf_alpha.out_dim + self.nerf_steps.out_dim  # 40D
+        self.time_encoder = _build_mlp(time_in_dim, time_encoder_dims)
         time_enc_dim = time_encoder_dims[-1]
-
-        # merge both branches back to time_enc_dim
-        self.time_merge = nn.Sequential(
-            nn.Linear(2 * branch_dim, time_enc_dim),
-            nn.SiLU(),
-        )
 
         # --- AdaLN cross-modal conditioning ---
         self.adaLN = AdaLN(time_dim=time_enc_dim, state_dim=state_dim)
 
         # --- fusion bottleneck ---
-        pre_fused_dim = 2 * state_dim + time_enc_dim   # state_mod + time_enc + state residual
+        # state_mod + time_enc only; raw state excluded (already encoded in state_mod)
         self.fusion_bottleneck = nn.Sequential(
-            nn.Linear(pre_fused_dim, fused_dims),
+            nn.Linear(state_dim + time_enc_dim, fused_dims),
             nn.SiLU(),
         )
 
@@ -188,16 +179,15 @@ class Backbone_Encoder(nn.Module):
         self.trunk_out_dim = projection_dims[-1]
 
     def forward(self, state: torch.Tensor, alpha: torch.Tensor, steps: torch.Tensor) -> torch.Tensor:
-        # --- separate time encoding ---
-        alpha_enc = self.alpha_encoder(self.nerf_alpha(alpha))
-        steps_enc = self.steps_encoder(self.nerf_steps(steps))
-        time_enc  = self.time_merge(torch.cat([alpha_enc, steps_enc], dim=-1))  # (B, time_enc_dim)
+        # --- time encoding ---
+        time_emb = torch.cat([self.nerf_alpha(alpha), self.nerf_steps(steps)], dim=-1)
+        time_enc = self.time_encoder(time_emb)                           # (B, time_enc_dim)
 
         # --- AdaLN cross-modal conditioning ---
-        state_mod = self.adaLN(state, time_enc)                                 # (B, state_dim)
+        state_mod = self.adaLN(state, time_enc)                          # (B, state_dim)
 
         # --- fusion bottleneck ---
-        fused = self.fusion_bottleneck(torch.cat([state_mod, time_enc, state], dim=-1))
+        fused = self.fusion_bottleneck(torch.cat([state_mod, time_enc], dim=-1))
 
         # --- shared trunk ---
         return self.projection_encoder(fused)
@@ -220,8 +210,7 @@ class Backbone_Encoder(nn.Module):
 #     ├── actor_private  (1 layer, width = projection_dims[-1])  →  mean_head, conc_head
 #     └── critic_private (1 layer, width = projection_dims[-1])  →  mc_layer
 #
-# New constructor arg:
-#   Private head width is implicitly projection_dims[-1] — no extra arg.
+# Private head width is implicitly projection_dims[-1] — no extra arg.
 # ---------------------------------------------------------------------------
 
 class PPOAgent(nn.Module):
@@ -253,7 +242,6 @@ class PPOAgent(nn.Module):
         trunk_dim = self.backbone.trunk_out_dim
 
         # --- private heads ---
-        # Private heads use one layer of width projection_dims[-1] — no extra arg needed.
         head_out_dim = projection_dims[-1]
         self.actor_private  = _build_mlp(trunk_dim, [head_out_dim])
         self.critic_private = _build_mlp(trunk_dim, [head_out_dim])

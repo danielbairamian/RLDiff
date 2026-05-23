@@ -119,7 +119,7 @@ class DiffusionEnv:
         else:
             self.z_real_norm = None
 
-        self.k  = max(1, int(0.01 * self.x1.shape[0])) # top 1% by default, but at least 1 neighbor for reward calculation
+        self.k  = max(1, int(0.05 * self.x1.shape[0])) # top 5% by default, but at least 1 neighbor for reward calculation
         # self.k = 1
         self.x0 = torch.randn_like(self.x1)[:self.x1.shape[0] // self.sample_multiplier]
 
