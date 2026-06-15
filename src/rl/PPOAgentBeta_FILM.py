@@ -104,20 +104,19 @@ def _build_mlp(input_dim: int, layer_dims: List[int]) -> nn.Sequential:
 # but with per-unit noise to break symmetry and avoid coupled gradient updates.
 # ---------------------------------------------------------------------------
 
-class AdaLN(nn.Module):
+class FiLM(nn.Module):
     def __init__(self, time_dim: int, state_dim: int):
         super().__init__()
-        self.norm  = nn.LayerNorm(state_dim, elementwise_affine=False)
         self.gamma = nn.Linear(time_dim, state_dim)
         self.beta  = nn.Linear(time_dim, state_dim)
 
         self.gamma.weight.data.normal_(0.0, 0.01)
-        self.gamma.bias.data.normal_(1.0, 0.01)
+        self.gamma.bias.data.normal_(0.0, 0.01)
         self.beta.weight.data.normal_(0.0, 0.01)
         self.beta.bias.data.normal_(0.0, 0.01)
 
     def forward(self, state_enc: torch.Tensor, time_enc: torch.Tensor) -> torch.Tensor:
-        return self.gamma(time_enc) * self.norm(state_enc) + self.beta(time_enc)
+        return (1.0 + self.gamma(time_enc)) * state_enc + self.beta(time_enc)
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +164,12 @@ class Backbone_Encoder(nn.Module):
         time_enc_dim = time_encoder_dims[-1]
 
         # --- AdaLN cross-modal conditioning ---
-        self.adaLN = AdaLN(time_dim=time_enc_dim, state_dim=state_dim)
+        self.film = FiLM(time_dim=time_enc_dim, state_dim=state_dim)
 
         # --- fusion bottleneck ---
         # state_mod + time_enc only; raw state excluded (already encoded in state_mod)
         self.fusion_bottleneck = nn.Sequential(
-            nn.Linear(state_dim + time_enc_dim, fused_dims),
+            nn.Linear(state_dim * 2 + time_enc_dim, fused_dims),
             nn.SiLU(),
         )
 
@@ -184,10 +183,10 @@ class Backbone_Encoder(nn.Module):
         time_enc = self.time_encoder(time_emb)                           # (B, time_enc_dim)
 
         # --- AdaLN cross-modal conditioning ---
-        state_mod = self.adaLN(state, time_enc)                          # (B, state_dim)
+        state_mod = self.film(state, time_enc)                          # (B, state_dim)
 
         # --- fusion bottleneck ---
-        fused = self.fusion_bottleneck(torch.cat([state_mod, time_enc], dim=-1))
+        fused = self.fusion_bottleneck(torch.cat([state, state_mod, time_enc], dim=-1))
 
         # --- shared trunk ---
         return self.projection_encoder(fused)
@@ -265,13 +264,13 @@ class PPOAgent(nn.Module):
 
         # --- critic output layer (mc_layer wraps self.critic) ---
         self.critic = nn.Linear(head_out_dim, 1)
-        self.mc_layer = MonteCarloLayer(
-            self.critic,
-            dropout_p=0.05, mc_samples=512,
-            attention_mode='attention', attend_mode='inputs',
-            num_heads=4, embedding_size=head_out_dim // 2,
-            query_mode='per_sample',
-        )
+        # self.mc_layer = MonteCarloLayer(
+        #     self.critic,
+        #     dropout_p=0.05, mc_samples=512,
+        #     attention_mode='attention', attend_mode='inputs',
+        #     num_heads=4, embedding_size=head_out_dim // 2,
+        #     query_mode='per_sample',
+        # )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -309,7 +308,8 @@ class PPOAgent(nn.Module):
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(actor_feat)
         dist  = Beta(conc_alpha, conc_beta)
-        value = self.mc_layer.get_mean_only(critic_feat)
+        # value = self.mc_layer.get_mean_only(critic_feat)
+        value = self.critic(critic_feat)  # value head is separate from MC layer for sampling efficiency; MC used only in PPO update
 
         if deterministic:
             action = conc_alpha / (conc_alpha + conc_beta)  # true mean, well-behaved at all κ
@@ -334,7 +334,8 @@ class PPOAgent(nn.Module):
 
         conc_alpha, conc_beta, net_dict = self._alpha_beta_params(actor_feat)
         dist  = Beta(conc_alpha, conc_beta)
-        value = self.mc_layer.get_mean_only(critic_feat)
+        # value = self.mc_layer.get_mean_only(critic_feat)
+        value = self.critic(critic_feat)
 
         log_prob = dist.log_prob(actions).sum(dim=-1)
         entropy  = dist.entropy().sum(dim=-1)

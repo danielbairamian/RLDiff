@@ -10,8 +10,8 @@ class ResBlock(nn.Module):
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
 
-        nn.init.orthogonal_(self.conv1.weight, gain=nn.init.calculate_gain("relu"))
-        nn.init.orthogonal_(self.conv2.weight, gain=0.1)  # near-identity at init
+        # nn.init.orthogonal_(self.conv1.weight, gain=nn.init.calculate_gain("relu"))
+        # nn.init.orthogonal_(self.conv2.weight, gain=0.1)  # near-identity at init
 
     def forward(self, x):
         return x + self.conv2(F.silu(self.conv1(F.silu(x))))
@@ -73,8 +73,8 @@ class VisionEncoder(nn.Module):
 
         # small init on final projection — keeps early policy/value outputs near zero,
         # which avoids large initial gradients from arbitrary action preferences
-        nn.init.orthogonal_(self.proj.weight, gain=0.01)
-        nn.init.normal_(self.proj.bias, mean=0.0, std=1e-3)
+        # nn.init.orthogonal_(self.proj.weight, gain=0.01)
+        # nn.init.normal_(self.proj.bias, mean=0.0, std=1e-3)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -84,6 +84,7 @@ class VisionEncoder(nn.Module):
             z: (B, latent_dim) state vector.
         """
         x = self.encoder(x)
+        x = F.silu(x)
         x = self.pool(x).flatten(1)
         return self.proj(x)
 

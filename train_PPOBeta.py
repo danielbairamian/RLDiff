@@ -403,9 +403,9 @@ if __name__ == "__main__":
     parser.add_argument('--time_encoder_dims',    type=int,   nargs='+', default=[32, 64],       help='Output dims for each layer in the time encoder')
     parser.add_argument('--projection_dims',      type=int,   nargs='+', default=[256, 128],     help='Output dims for each layer in the projection encoder')
     parser.add_argument('--num_epochs',           type=int,   default=200,             help='Number of epochs to train')
-    parser.add_argument('--lr',                   type=float, default=3e-4,            help='Learning rate for optimizer')
+    parser.add_argument('--lr',                   type=float, default=1e-4,            help='Learning rate for optimizer')
     parser.add_argument('--lr_min',               type=float, default=1e-5,              help='Minimum learning rate for optimizer (-1 = no decay)')
-    parser.add_argument('--weight_decay',         type=float, default=1e-4,            help='Weight decay for optimizer')
+    parser.add_argument('--weight_decay',         type=float, default=1e-5,            help='Weight decay for optimizer')
     parser.add_argument('--entropy_coef',         type=float, default=1e-3,             help='Entropy coefficient for PPO')
     parser.add_argument('--target_steps',         type=int,   default=64,             help='Steps to collect per PPO update')
     parser.add_argument('--minibatch_size',       type=int,   default=256,             help='Minibatch size for PPO updates')
@@ -497,7 +497,7 @@ if __name__ == "__main__":
     # Set the GAE lambda based on the order and budget
     # ex: if order=1 and budget=10, then gae_lambda = 1 - (1/10) = 0.9
     # ex: if order=2 and budget=20, then gae_lambda = 1 - (2/20) = 0.9
-    args.gae_lambda = 1.0 - (args.order / args.budget)
+    # args.gae_lambda = 1.0 - (args.order / args.budget)
     
     ppo_args = {
         'num_epochs': args.num_epochs,
